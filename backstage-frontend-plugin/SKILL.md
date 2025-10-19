@@ -174,16 +174,25 @@ Hide/show entity content based on permissions or ownership to avoid broken UX fo
 
 ### 1) Scaffold
 
+**⚠️ CRITICAL**: `yarn new` generates LEGACY frontend plugins using the old `createPlugin` API. You MUST convert the generated code to the New Frontend System for everything to work properly.
+
 ```bash
-# From the repository root
+# From the repository root (interactive)
 yarn new
-# Select: plugin
+# Select: frontend-plugin
 # Enter plugin id (kebab case, e.g. example)
+
+# Non-interactive (for AI agents/automation)
+yarn new --select frontend-plugin --option pluginId=example --option owner=""
 ```
 
-This creates `plugins/example/` with a minimal structure. ([Backstage][1])
+This creates `plugins/example/` with legacy code. **Follow steps 2-5 below to convert it to the New Frontend System.**
 
-### 2) Routes (`src/routes.ts`)
+([Backstage][1])
+
+### 2) Convert Routes (`src/routes.ts`)
+
+Replace the generated legacy code with New Frontend System:
 
 ```ts
 import { createRouteRef } from '@backstage/frontend-plugin-api';
@@ -192,9 +201,13 @@ import { createRouteRef } from '@backstage/frontend-plugin-api';
 export const rootRouteRef = createRouteRef();
 ```
 
-The route ref becomes the anchor for linking and navigation. ([Backstage][1])
+**Change from legacy**: Import from `@backstage/frontend-plugin-api` (not `@backstage/core-plugin-api`). Remove the `id` parameter from `createRouteRef()`.
 
-### 3) Plugin + extensions (`src/plugin.ts`)
+([Backstage][1])
+
+### 3) Convert Plugin (`src/plugin.ts`)
+
+**COMPLETELY REPLACE** the generated legacy code with New Frontend System:
 
 ```tsx
 import {
@@ -203,13 +216,14 @@ import {
   NavItemBlueprint,
 } from '@backstage/frontend-plugin-api';
 import { rootRouteRef } from './routes';
+import ExampleIcon from '@material-ui/icons/Extension';
 
 // Page (lazy-loaded via dynamic import)
 const examplePage = PageBlueprint.make({
   params: {
     routeRef: rootRouteRef,
     path: '/example',
-    loader: () => import('./components/ExamplePage').then(m => <m.ExamplePage />),
+    loader: () => import('./components/ExampleComponent').then(m => <m.ExampleComponent />),
   },
 });
 
@@ -218,7 +232,7 @@ const exampleNavItem = NavItemBlueprint.make({
   params: {
     routeRef: rootRouteRef,
     title: 'Example',
-    icon: ExampleIcon, // custom SvgIcon or from MUI icon set
+    icon: ExampleIcon,
   },
 });
 
@@ -230,22 +244,42 @@ export const examplePlugin = createFrontendPlugin({
 });
 ```
 
-Notes: export the plugin as the default export in `src/index.ts`; extensions are not exported by the package. ([Backstage][1])
+**Changes from legacy**:
+- Use `createFrontendPlugin` (not `createPlugin`)
+- Use `PageBlueprint` and `NavItemBlueprint` (not `createRoutableExtension`)
+- Export only the plugin instance (not individual page components)
+- Extensions are defined inline and passed to the plugin
 
-### 4) Page component (`src/components/ExamplePage.tsx`)
+([Backstage][1])
+
+### 4) Update Page Component (`src/components/ExampleComponent.tsx`)
+
+The scaffolded component is already compatible with the New Frontend System. You can modify it as needed:
 
 ```tsx
-export function ExamplePage() {
+export function ExampleComponent() {
   return (
     <div>
       <h1>Example</h1>
-      <p>Hello World!</p>
+      <p>Hello from the New Frontend System!</p>
     </div>
   );
 }
 ```
 
-### 5) Utility API (optional)
+**Note**: The component name should match what's referenced in the `loader` in `plugin.ts`.
+
+### 5) Convert Index (`src/index.ts`)
+
+Update the exports to only export the plugin instance:
+
+```ts
+export { examplePlugin as default } from './plugin';
+```
+
+**Changes from legacy**: Remove all component exports (like `HelloWorldPage`). Only export the plugin.
+
+### 6) Utility API (optional)
 
 ```ts
 // src/api.ts
@@ -288,7 +322,7 @@ export const examplePlugin = createFrontendPlugin({
 });
 ```
 
-### 6) Entity integration (optional)
+### 7) Entity integration (optional)
 
 ```tsx
 import { EntityContentBlueprint } from '@backstage/plugin-catalog-react/alpha';

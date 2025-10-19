@@ -165,10 +165,16 @@ Add a terminal error handler to your router and prefer structured logs with cont
 ### 1) Scaffold
 
 ```bash
+# From the repository root (interactive)
 yarn new
 # Select: backend-plugin
 # Plugin id (without -backend suffix), e.g. example
+
+# Non-interactive (for AI agents/automation)
+yarn new --select backend-plugin --option pluginId=example --option owner=""
 ```
+
+This creates `plugins/example-backend/` using the New Backend System with `createBackendPlugin`.
 
 ([Backstage][3])
 
