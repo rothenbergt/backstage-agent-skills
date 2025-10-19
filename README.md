@@ -43,6 +43,13 @@ Both skills follow the progressive disclosure principle:
 2. **SKILL.md** - Core workflow and quick reference
 3. **Reference files** - Detailed documentation loaded as needed
 
+## Cleanup scripts
+
+Concise helpers to strip scaffolded example code after generating a plugin.
+
+- Frontend: removes ExampleFetchComponent, renames ExampleComponent to PluginNamePage, and updates imports.
+- Backend: removes example services and tests, simplifies router to /health, and marks options as used to avoid TS6133.
+
 ## License
 
 Apache-2.0 - See LICENSE.txt in each skill folder for complete terms.
