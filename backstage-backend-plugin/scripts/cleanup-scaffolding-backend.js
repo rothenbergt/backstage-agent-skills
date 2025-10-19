@@ -80,6 +80,9 @@ export async function createRouter(
   const router = Router();
   router.use(express.json());
 
+  // Mark options as used to satisfy TypeScript when no auth is wired yet
+  void options;
+
   router.get('/health', (_req, res) => {
     res.json({ status: 'ok' });
   });
