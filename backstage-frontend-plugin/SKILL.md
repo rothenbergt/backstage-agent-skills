@@ -1,6 +1,6 @@
 ---
 name: backstage-frontend-plugin
-description: Build Backstage frontend plugins with the new Frontend System: createFrontendPlugin, blueprints, routes, Utility APIs, testing. Use for pages, nav, entity content, or cards.
+description: "Build Backstage frontend plugins with the new Frontend System: createFrontendPlugin, blueprints, routes, Utility APIs, testing. Use for pages, nav, entity content, or cards."
 version: 1.0.0
 license: Complete terms in LICENSE.txt
 ---

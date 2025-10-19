@@ -1,6 +1,6 @@
 ---
 name: backstage-backend-plugin
-description: Build Backstage backend plugins with createBackendPlugin and core services: DI, httpRouter, secure-by-default auth, Knex DB, routes, testing. Use for APIs and background jobs.
+description: "Build Backstage backend plugins with createBackendPlugin and core services: DI, httpRouter, secure-by-default auth, Knex DB, routes, testing. Use for APIs and background jobs."
 version: 1.0.0
 license: Complete terms in LICENSE.txt
 ---
