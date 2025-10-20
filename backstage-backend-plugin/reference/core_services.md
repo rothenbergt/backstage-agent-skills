@@ -152,11 +152,11 @@ env.registerInit({
 
 **Migration Pattern**:
 
-```ts
-// migrations/001_create_users_table.ts
-import { Knex } from 'knex';
+> **Note**: Migrations must be written in JavaScript (`.js`), not TypeScript. Backstage runs Knex migrations at runtime inside your backend service, and the default runtime does not include TypeScript loaders. Third-party plugins ship their migrations as compiled JavaScript files (`.../migrations/*.js`). Export migration files in your `package.json` to ensure Docker containers include them. ([Backstage Knex Migrations](https://backstage.io/docs/tutorials/manual-knex-rollback/))
 
-export async function up(knex: Knex): Promise<void> {
+```js
+// migrations/001_create_users_table.js
+exports.up = async function(knex) {
   await knex.schema.createTable('users', table => {
     table.increments('id').primary();
     table.string('name').notNullable();
@@ -165,10 +165,23 @@ export async function up(knex: Knex): Promise<void> {
     table.timestamp('created_at').defaultTo(knex.fn.now());
     table.index(['email']);
   });
-}
+};
 
-export async function down(knex: Knex): Promise<void> {
+exports.down = async function(knex) {
   await knex.schema.dropTable('users');
+};
+```
+
+**Exporting Migrations**:
+
+Include migrations in your `package.json` exports:
+
+```json
+{
+  "files": [
+    "dist",
+    "migrations/**/*.js"
+  ]
 }
 ```
 

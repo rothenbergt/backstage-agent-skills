@@ -150,7 +150,7 @@ Add a terminal error handler to your router and prefer structured logs with cont
 
 - Use `const knex = await database.getClient();` to get a database client
 - Keep queries in small repo/service modules
-- Write migrations and run them in CI/CD
+- Write migrations in JavaScript (`.js`) and export them in package.json (see Core Services Reference for details)
 
 ### Observability & Scalability
 
