@@ -1,7 +1,7 @@
 ---
 name: backstage-frontend-plugin
 description: "Build Backstage frontend plugins with the new Frontend System: createFrontendPlugin, blueprints, routes, Utility APIs, testing. Use for pages, nav, entity content, or cards."
-version: 1.0.0
+version: 1.1.0
 license: Complete terms in LICENSE.txt
 ---
 
@@ -68,7 +68,7 @@ After implementing the plugin:
    - Utility APIs with mocked dependencies
 3. Run tests and achieve good coverage:
    ```bash
-   yarn backstage-cli package test --coverage
+   yarn backstage-cli package test --coverage --watchAll=false
    ```
 
 ---
@@ -174,7 +174,7 @@ Hide/show entity content based on permissions or ownership to avoid broken UX fo
 
 ### 1) Scaffold
 
-**⚠️ CRITICAL**: `yarn new` generates LEGACY frontend plugins using the old `createPlugin` API. You MUST convert the generated code to the New Frontend System for everything to work properly.
+`yarn new` generates a New Frontend System plugin natively (`createFrontendPlugin` + `PageBlueprint` in `src/plugin.tsx`), so no legacy conversion is needed. It also registers the plugin as a dependency of `packages/app`, where it is picked up by feature discovery (`app.packages: all` in app-config).
 
 ```bash
 # From the repository root (interactive)
@@ -186,48 +186,33 @@ yarn new
 yarn new --select frontend-plugin --option pluginId=example --option owner=""
 ```
 
-This creates `plugins/example/` with legacy code. **Follow steps 2-5 below to convert it to the New Frontend System.**
-
 ([Backstage][1])
 
-### 2) Convert Routes (`src/routes.ts`)
+### 2) What you get (and what to clean up)
 
-Replace the generated legacy code with New Frontend System:
+The scaffold ships a working example todo app: `src/components/TodoPage/` (fetches from a matching example backend) and `src/components/TodoList/` (table with mock data). Run the cleanup script to strip the example and leave a minimal named page component:
 
-```ts
-import { createRouteRef } from '@backstage/frontend-plugin-api';
-
-// Keep routes here to avoid circular imports.
-export const rootRouteRef = createRouteRef();
+```bash
+node scripts/cleanup-scaffolding.js plugins/example
 ```
 
-**Change from legacy**: Import from `@backstage/frontend-plugin-api` (not `@backstage/core-plugin-api`). Remove the `id` parameter from `createRouteRef()`.
+Generated files that are already correct as-is:
 
-([Backstage][1])
+- `src/routes.ts`: `createRouteRef()` from `@backstage/frontend-plugin-api`
+- `src/plugin.tsx`: `PageBlueprint.make({ path, routeRef, loader })` + `createFrontendPlugin({ pluginId, extensions, routes })`
+- `src/index.ts`: `export { examplePlugin as default } from './plugin';` (only the plugin is exported; components stay internal)
 
-### 3) Convert Plugin (`src/plugin.ts`)
+UI components use `@backstage/ui` primitives (`Header`, `Container`) rather than legacy `@backstage/core-components` layouts.
 
-**COMPLETELY REPLACE** the generated legacy code with New Frontend System:
+### 3) Add a sidebar nav item (optional)
+
+The scaffold creates the page only. To add a sidebar entry:
 
 ```tsx
-import {
-  createFrontendPlugin,
-  PageBlueprint,
-  NavItemBlueprint,
-} from '@backstage/frontend-plugin-api';
-import { rootRouteRef } from './routes';
+import { NavItemBlueprint } from '@backstage/frontend-plugin-api';
 import ExampleIcon from '@material-ui/icons/Extension';
+import { rootRouteRef } from './routes';
 
-// Page (lazy-loaded via dynamic import)
-const examplePage = PageBlueprint.make({
-  params: {
-    routeRef: rootRouteRef,
-    path: '/example',
-    loader: () => import('./components/ExampleComponent').then(m => <m.ExampleComponent />),
-  },
-});
-
-// Sidebar navigation item
 const exampleNavItem = NavItemBlueprint.make({
   params: {
     routeRef: rootRouteRef,
@@ -236,50 +221,10 @@ const exampleNavItem = NavItemBlueprint.make({
   },
 });
 
-// Export plugin instance; do NOT export extensions from the package
-export const examplePlugin = createFrontendPlugin({
-  pluginId: 'example',
-  extensions: [examplePage, exampleNavItem],
-  routes: { root: rootRouteRef },
-});
+// then add exampleNavItem to the plugin's extensions array
 ```
 
-**Changes from legacy**:
-- Use `createFrontendPlugin` (not `createPlugin`)
-- Use `PageBlueprint` and `NavItemBlueprint` (not `createRoutableExtension`)
-- Export only the plugin instance (not individual page components)
-- Extensions are defined inline and passed to the plugin
-
-([Backstage][1])
-
-### 4) Update Page Component (`src/components/ExampleComponent.tsx`)
-
-The scaffolded component is already compatible with the New Frontend System. You can modify it as needed:
-
-```tsx
-export function ExampleComponent() {
-  return (
-    <div>
-      <h1>Example</h1>
-      <p>Hello from the New Frontend System!</p>
-    </div>
-  );
-}
-```
-
-**Note**: The component name should match what's referenced in the `loader` in `plugin.ts`.
-
-### 5) Convert Index (`src/index.ts`)
-
-Update the exports to only export the plugin instance:
-
-```ts
-export { examplePlugin as default } from './plugin';
-```
-
-**Changes from legacy**: Remove all component exports (like `HelloWorldPage`). Only export the plugin.
-
-### 6) Utility API (optional)
+### 4) Utility API (optional)
 
 ```ts
 // src/api.ts
@@ -322,7 +267,7 @@ export const examplePlugin = createFrontendPlugin({
 });
 ```
 
-### 7) Entity integration (optional)
+### 5) Entity integration (optional)
 
 ```tsx
 import { EntityContentBlueprint } from '@backstage/plugin-catalog-react/alpha';
@@ -341,19 +286,15 @@ const exampleEntityContent = EntityContentBlueprint.make({
 
 ## Verify in an app
 
-- If using the new Frontend System app:
-  - Ensure the app is created with `@backstage/frontend-defaults` and your plugin is included at app creation.
-  - Start the repo and visit the path declared by your `PageBlueprint`.
-- If using a legacy app:
-  - Import the page component and add a `<Route path="/example" element={<ExamplePage />} />` under `FlatRoutes`.
-  - Start the repo and navigate to `/example`.
+- New Frontend System app (`@backstage/frontend-defaults`): `yarn new` already added the plugin to `packages/app`'s dependencies, and feature discovery (`app.packages: all`) mounts it automatically. Start the repo and visit the path declared by your `PageBlueprint` (e.g. `/example`).
+- Legacy app (`@backstage/app-defaults` with manual `FlatRoutes`): import the page component and add `<Route path="/example" element={<ExamplePage />} />`. This requires temporarily exporting the page component to bridge legacy routing.
 
 ## Testing, linting & structure checks
 
 Run tests and lints with Backstage's CLI:
 
 ```bash
-yarn backstage-cli package test
+yarn backstage-cli package test --watchAll=false
 yarn backstage-cli package lint
 yarn backstage-cli repo lint
 ```

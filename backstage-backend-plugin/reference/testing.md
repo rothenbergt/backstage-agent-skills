@@ -410,6 +410,8 @@ describe('database integration', () => {
 - MySQL
 - SQLite
 
+**How engines are provided**: for each engine, `TestDatabases` first checks a connection-string environment variable (e.g. `BACKSTAGE_TEST_DATABASE_POSTGRES16_CONNECTION_STRING`) and uses that server if set; otherwise it starts a throwaway container via testcontainers. Locally the testcontainers fallback works if Docker is running. In CI, always provide the connection string via a service container (see CI/CD Integration below): the testcontainers path loads native modules that can crash jest workers with SIGSEGV on Linux runners, and the service-container pattern is what Backstage core's own CI uses.
+
 ### Repository Testing
 
 Test database repositories:
@@ -671,20 +673,20 @@ describe('error handling', () => {
 ### Command Line
 
 ```bash
-# Run all tests
-yarn backstage-cli package test
+# Run all tests (--watchAll=false prevents jest watch mode, which never exits in CI/agents)
+yarn backstage-cli package test --watchAll=false
 
 # Run tests in watch mode
 yarn backstage-cli package test --watch
 
 # Run with coverage
-yarn backstage-cli package test --coverage
+yarn backstage-cli package test --coverage --watchAll=false
 
 # Run specific test file
-yarn backstage-cli package test router.test.ts
+yarn backstage-cli package test router.test.ts --watchAll=false
 
 # Run tests matching pattern
-yarn backstage-cli package test --testNamePattern="authentication"
+yarn backstage-cli package test --testNamePattern="authentication" --watchAll=false
 ```
 
 ### CI/CD Integration
@@ -699,10 +701,15 @@ jobs:
     runs-on: ubuntu-latest
 
     services:
+      # Provides postgres for TestDatabases via the connection-string env var
+      # below. Without the env var, TestDatabases falls back to testcontainers,
+      # which can SIGSEGV jest workers on Linux runners.
       postgres:
-        image: postgres:14
+        image: postgres:16
         env:
           POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -710,13 +717,15 @@ jobs:
           --health-retries 5
 
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
 
-      - run: yarn install --frozen-lockfile
+      - run: yarn install --immutable
       - run: yarn backstage-cli package test --coverage
+        env:
+          BACKSTAGE_TEST_DATABASE_POSTGRES16_CONNECTION_STRING: postgresql://postgres:postgres@localhost:5432
 
       - uses: codecov/codecov-action@v3
         with:

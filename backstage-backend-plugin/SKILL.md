@@ -1,7 +1,7 @@
 ---
 name: backstage-backend-plugin
 description: "Build Backstage backend plugins with createBackendPlugin and core services: DI, httpRouter, secure-by-default auth, Knex DB, routes, testing. Use for APIs and background jobs."
-version: 1.0.0
+version: 1.1.0
 license: Complete terms in LICENSE.txt
 ---
 
@@ -76,7 +76,7 @@ After implementing the plugin:
    - Authentication flows
 3. Run tests and achieve good coverage:
    ```bash
-   yarn backstage-cli package test --coverage
+   yarn backstage-cli package test --coverage --watchAll=false
    ```
 
 ---
@@ -125,11 +125,13 @@ Validate inputs at the edge using a schema (e.g., zod) before hitting DBs or ext
 
 ### Error Handling
 
-Add a terminal error handler to your router and prefer structured logs with context:
+Throw error types from `@backstage/errors` (`InputError`, `NotFoundError`, `NotAllowedError`) in handlers and add the framework's error middleware as the terminal handler. Do NOT use `errorHandler` from `@backstage/backend-common`; that package has been removed from Backstage.
   
   ```ts
-  import { errorHandler } from '@backstage/backend-common';
-  router.use(errorHandler());
+  import { MiddlewareFactory } from '@backstage/backend-defaults/rootHttpRouter';
+  
+  const middleware = MiddlewareFactory.create({ logger, config });
+  router.use(middleware.error());
   ```
 
 ### Auth and Identity
@@ -182,7 +184,7 @@ This creates `plugins/example-backend/` using the New Backend System with `creat
 
 ```ts
 import { createBackendPlugin, coreServices } from '@backstage/backend-plugin-api';
-import { createRouter } from './service/router';
+import { createRouter } from './router';
 
 export const examplePlugin = createBackendPlugin({
   pluginId: 'example',
@@ -205,13 +207,17 @@ export const examplePlugin = createBackendPlugin({
     });
   },
 });
+```
 
+And in `src/index.ts`:
+
+```ts
 export { examplePlugin as default } from './plugin';
 ```
 
-Key points: DI via `deps`, register routes with the plugin’s `httpRouter`, and export the plugin as the default. ([Backstage][3])
+Key points: DI via `deps`, register routes with the plugin’s `httpRouter`, and export the plugin as the default from `src/index.ts`. ([Backstage][3])
 
-### 3) `src/service/router.ts` — minimal Express router
+### 3) `src/router.ts`: minimal Express router (this is where `yarn new` puts it)
 
 ```ts
 import express from 'express';
@@ -242,17 +248,15 @@ export async function createRouter(options: RouterOptions): Promise<express.Rout
 }
 ```
 
-### 4) Add to your backend
+### 4) Backend registration (automatic)
 
-In `packages/backend/src/index.ts`:
+`yarn new` automatically registers the plugin in `packages/backend/src/index.ts`. Verify the line is there; only add it manually if the plugin was created some other way:
 
 ```ts
-const backend = createBackend();
-backend.add(import('@internal/plugin-example-backend'));
-backend.start();
+backend.add(import('@internal/backstage-plugin-example-backend'));
 ```
 
-Now `GET http://localhost:7007/api/example/health` returns `{ "status": "ok" }`. ([Backstage][3])
+Now `GET http://localhost:7007/api/example/health` returns `{ "status": "ok" }` (as long as `/health` was opened with `addAuthPolicy`; see step 2). ([Backstage][3])
 
 ### 5) Database, auth, identity (when needed)
 
@@ -274,12 +278,14 @@ Now `GET http://localhost:7007/api/example/health` returns `{ "status": "ok" }`.
 Use Backstage's CLI for tests and lints:
 
 ```bash
-yarn backstage-cli package test
+# Always pass --watchAll=false when running non-interactively (CI, AI agents);
+# without it jest starts in watch mode and never exits.
+yarn backstage-cli package test --watchAll=false
 yarn backstage-cli package lint
 yarn backstage-cli repo lint
 ```
 
-Keep routers small (`/service/router.ts`), inject dependencies (DB, auth, clients) from `plugin.ts`, and avoid in-memory state (horizontally scalable).
+Keep routers small (`src/router.ts`), inject dependencies (DB, auth, clients) from `plugin.ts`, and avoid in-memory state (horizontally scalable).
 
 ---
 
