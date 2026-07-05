@@ -483,17 +483,17 @@ describe('Component', () => {
 ### Command Line
 
 ```bash
-# Run all tests
-yarn backstage-cli package test
+# Run all tests (--watchAll=false prevents jest watch mode, which never exits in CI/agents)
+yarn backstage-cli package test --watchAll=false
 
 # Run tests in watch mode
 yarn backstage-cli package test --watch
 
 # Run with coverage
-yarn backstage-cli package test --coverage
+yarn backstage-cli package test --coverage --watchAll=false
 
 # Run specific test file
-yarn backstage-cli package test ExampleComponent.test.tsx
+yarn backstage-cli package test ExampleComponent.test.tsx --watchAll=false
 ```
 
 ### CI/CD Integration

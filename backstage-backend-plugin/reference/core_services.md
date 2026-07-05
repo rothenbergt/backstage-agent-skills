@@ -675,14 +675,16 @@ export async function createRouter(options: RouterOptions): Promise<express.Rout
 
 ### Error Handling
 
-Use error middleware:
+Throw error types from `@backstage/errors` in handlers and terminate the router with the framework's error middleware. (`errorHandler` from `@backstage/backend-common` no longer exists; that package has been removed.)
 
 ```ts
-import { errorHandler } from '@backstage/backend-common';
+import { MiddlewareFactory } from '@backstage/backend-defaults/rootHttpRouter';
+import { NotFoundError } from '@backstage/errors';
 
 const router = express.Router();
-// ... define routes
-router.use(errorHandler());
+// ... define routes; inside handlers: throw new NotFoundError('no such item')
+const middleware = MiddlewareFactory.create({ logger, config });
+router.use(middleware.error());
 ```
 
 ### Horizontal Scalability
