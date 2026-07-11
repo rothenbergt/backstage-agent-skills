@@ -6,25 +6,26 @@ Claude skills for building Backstage plugins with the New Frontend and Backend S
 
 ### backstage-frontend-plugin
 
-Build Backstage frontend plugins with createFrontendPlugin, blueprints, routes, Utility APIs, and testing. Use for creating pages, navigation items, entity content, or cards.
+Build Backstage frontend plugins with the New Frontend System (`createFrontendPlugin`, blueprints, routes, Utility APIs, testing). Use for creating pages, navigation items, entity content, or cards.
 
 **Includes:**
 
-- Step-by-step development workflow
-- Extension blueprints guide (PageBlueprint, NavItemBlueprint, EntityContentBlueprint, ApiBlueprint)
-- Utility API patterns and best practices
-- Comprehensive testing guide with @backstage/frontend-test-utils
+- Step-by-step development workflow against the current `yarn new` frontend-plugin template (already NFS-wired)
+- Extension blueprints guide (`PageBlueprint`, `SubPageBlueprint`, `EntityContentBlueprint`, `ApiBlueprint`, app-level blueprints) with notes on the deprecated `NavItemBlueprint`
+- Utility API patterns (with imports from `@backstage/frontend-plugin-api`) and best practices
+- Comprehensive testing guide with `@backstage/frontend-test-utils` (`renderInTestApp`, `createExtensionTester(...).reactElement()`, `mockApis.*`)
 
 ### backstage-backend-plugin
 
-Build Backstage backend plugins with createBackendPlugin and core services. Use for creating REST/HTTP APIs, background jobs, data processing, and integrations.
+Build Backstage backend plugins and modules with `createBackendPlugin`, core services, and extension points. Use for REST/HTTP APIs, background jobs, data processing, integrations, and modules that extend existing plugins.
 
 **Includes:**
 
-- Step-by-step development workflow
-- Core services reference (httpRouter, logger, database, auth, scheduler, cache, etc.)
-- Production-ready patterns for validation, error handling, and security
-- Comprehensive testing guide with @backstage/backend-test-utils
+- Step-by-step development workflow against the current `yarn new` backend-plugin template (`src/router.ts`, `express-promise-router`, `zod`, service refs)
+- Core services reference covering every `coreServices.*` entry (httpRouter, logger, database, httpAuth, userInfo, auth, scheduler, cache, urlReader, permissions, permissionsRegistry, auditor, lifecycle, rootHealth, …)
+- Modules + extension points (`createBackendModule`, `env.registerExtensionPoint`)
+- Production-ready patterns for validation, error handling (via `MiddlewareFactory` / root error middleware), and security
+- Comprehensive testing guide with `@backstage/backend-test-utils` (`startTestBackend` + `supertest`, `mockServices`, `mockCredentials`, MSW v2, `TestDatabases`)
 
 ## Installation
 

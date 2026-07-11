@@ -2,7 +2,7 @@
 
 ## Overview
 
-Comprehensive testing ensures backend plugins work correctly and helps catch issues before production. Backstage provides specialized testing utilities in the `@backstage/backend-test-utils` package for creating test backends, mocking services, and simulating real-world scenarios.
+Comprehensive testing ensures backend plugins and modules work correctly and helps catch issues before production. Backstage provides specialized testing utilities in the `@backstage/backend-test-utils` package for creating test backends, mocking services, simulating authenticated requests, and running tests against real database engines.
 
 ---
 
@@ -13,13 +13,16 @@ Comprehensive testing ensures backend plugins work correctly and helps catch iss
 ```json
 {
   "devDependencies": {
-    "@backstage/backend-test-utils": "^0.4.0",
-    "@backstage/test-databases": "^0.1.0",
-    "msw": "^1.0.0",
-    "supertest": "^6.0.0"
+    "@backstage/backend-test-utils": "^1.11.0",
+    "msw": "^2.0.0",
+    "supertest": "^7.0.0"
   }
 }
 ```
+
+Notes:
+- `@backstage/test-databases` is **not** a real package. `TestDatabases` lives in `@backstage/backend-test-utils` — just import it from there.
+- MSW v2 is used by new code in the Backstage repo. Older code still uses v1 (`rest.get`), so when touching existing plugin tests check their `package.json` first and match the local version.
 
 ### Test File Structure
 
@@ -27,12 +30,11 @@ Organize tests alongside source files:
 
 ```
 src/
-├── service/
-│   ├── router.ts
-│   └── router.test.ts
-├── database/
-│   ├── repository.ts
-│   └── repository.test.ts
+├── router.ts
+├── router.test.ts
+├── services/
+│   ├── TodoListService.ts
+│   └── TodoListService.test.ts
 └── plugin.test.ts
 ```
 
@@ -42,42 +44,43 @@ src/
 
 ### Basic Plugin Testing
 
-Use `startTestBackend` to create a test harness:
+Use `startTestBackend` to spin up a full backend harness with mock services, then drive it with `supertest`. The request helper is `await request(server).get(...)`, not `server.request(...)`:
 
 ```ts
-import { startTestBackend } from '@backstage/backend-test-utils';
+import { mockServices, startTestBackend } from '@backstage/backend-test-utils';
+import request from 'supertest';
 import { examplePlugin } from './plugin';
-import { mockServices } from '@backstage/backend-test-utils';
 
 describe('examplePlugin', () => {
-  it('initializes successfully', async () => {
+  it('serves a health endpoint', async () => {
+    const { server } = await startTestBackend({
+      features: [examplePlugin],
+    });
+
+    await request(server).get('/api/example/health').expect(200, { status: 'ok' });
+  });
+
+  it('reads configuration', async () => {
+    const fakeConfig = { example: { apiKey: 'test-key' } };
+    const mockLogger = mockServices.logger.mock();
+
     const { server } = await startTestBackend({
       features: [
-        examplePlugin(),
-        mockServices.rootConfig.factory({
-          data: {
-            example: {
-              apiKey: 'test-key',
-            },
-          },
-        }),
+        examplePlugin,
+        mockServices.rootConfig.factory({ data: fakeConfig }),
+        mockLogger.factory,
       ],
     });
 
-    expect(server).toBeDefined();
-  });
-
-  it('serves endpoints correctly', async () => {
-    const { server } = await startTestBackend({
-      features: [examplePlugin()],
-    });
-
-    const response = await server.request('/api/example/health');
+    const response = await request(server).get('/api/example/config-value');
     expect(response.status).toBe(200);
-    expect(response.body).toEqual({ status: 'ok' });
+    expect(response.body).toEqual({ value: 'test-key' });
+    expect(mockLogger.info).toHaveBeenCalledWith('Starting examplePlugin');
   });
 });
 ```
+
+The returned `server` also has a `.port()` method for low-level network interactions when `supertest` isn't enough.
 
 ---
 
@@ -85,51 +88,44 @@ describe('examplePlugin', () => {
 
 ### Available Mock Services
 
-Mock all core services for testing:
+Import mocks for every core service via `mockServices` and pass them as features to `startTestBackend`:
 
 ```ts
 import { mockServices } from '@backstage/backend-test-utils';
 
 const { server } = await startTestBackend({
   features: [
-    examplePlugin(),
+    examplePlugin,
     mockServices.logger.factory(),
     mockServices.database.factory(),
     mockServices.cache.factory(),
-    mockServices.rootConfig.factory({ data: config }),
+    mockServices.rootConfig.factory({ data: {} }),
   ],
 });
 ```
 
-**Available Mocks**:
-- `mockServices.logger` - Logger service
-- `mockServices.database` - Database service
-- `mockServices.cache` - Cache service
-- `mockServices.rootConfig` - Configuration service
-- `mockServices.auth` - Auth service
-- `mockServices.httpAuth` - HTTP auth service
-- `mockServices.userInfo` - User info service
-- `mockServices.discovery` - Discovery service
-- `mockServices.permissions` - Permissions service
-- `mockServices.scheduler` - Scheduler service
-- `mockServices.urlReader` - URL reader service
+Available mocks (current, full list): `auth`, `auditor`, `cache`, `database`, `discovery`, `events`, `httpAuth`, `httpRouter`, `lifecycle`, `logger`, `permissions`, `permissionsRegistry`, `rootConfig`, `rootHealth`, `rootHttpRouter`, `rootInstanceMetadata`, `rootLifecycle`, `rootLogger`, `scheduler`, `urlReader`, `userInfo`.
+
+Each mock exposes two variants:
+- `.factory(options?)` — service factory to pass in `features`.
+- `.mock(partialImpl?)` — a mock instance whose methods are `jest.fn()`. Configure them in your tests with `.mockResolvedValue(...)`, `.mockReturnValue(...)`, etc.
 
 ### Mock Logger
 
 Capture log output for assertions:
 
 ```ts
-import { mockServices } from '@backstage/backend-test-utils';
+import { mockServices, startTestBackend } from '@backstage/backend-test-utils';
 
 describe('logging', () => {
   it('logs important events', async () => {
     const mockLogger = mockServices.logger.mock();
 
     const { server } = await startTestBackend({
-      features: [examplePlugin(), mockLogger.factory],
+      features: [examplePlugin, mockLogger.factory],
     });
 
-    await server.request('/api/example/process');
+    await request(server).post('/api/example/process');
 
     expect(mockLogger.info).toHaveBeenCalledWith('Processing started');
   });
@@ -137,8 +133,6 @@ describe('logging', () => {
 ```
 
 ### Mock Configuration
-
-Provide test configuration:
 
 ```ts
 const mockConfig = mockServices.rootConfig.factory({
@@ -152,221 +146,167 @@ const mockConfig = mockServices.rootConfig.factory({
 });
 
 const { server } = await startTestBackend({
-  features: [examplePlugin(), mockConfig],
+  features: [examplePlugin, mockConfig],
 });
 ```
 
 ### Mock Database
 
-Use in-memory database for tests:
+Use in-memory SQLite (via `better-sqlite3`) for fast tests:
 
 ```ts
-import { mockServices } from '@backstage/backend-test-utils';
+const { server } = await startTestBackend({
+  features: [
+    examplePlugin,
+    mockServices.database.factory(),
+  ],
+});
+```
 
-describe('database operations', () => {
-  it('stores and retrieves data', async () => {
-    const { server } = await startTestBackend({
-      features: [
-        examplePlugin(),
-        mockServices.database.factory(),
-      ],
-    });
+### Mock Auth and Credentials
 
-    // Create data
-    await server.request('/api/example/data').send({ name: 'Test' });
+`mockCredentials` produces principals that test routes can check against:
 
-    // Retrieve data
-    const response = await server.request('/api/example/data');
-    expect(response.body).toHaveLength(1);
-    expect(response.body[0].name).toBe('Test');
+```ts
+import {
+  mockCredentials,
+  mockServices,
+  startTestBackend,
+} from '@backstage/backend-test-utils';
+import request from 'supertest';
+
+describe('authenticated routes', () => {
+  it('records who created the todo', async () => {
+    const { server } = await startTestBackend({ features: [examplePlugin] });
+
+    const res = await request(server)
+      .post('/api/example/todos')
+      .send({ title: 'My Todo' });
+
+    expect(res.status).toBe(201);
+    expect(res.body.createdBy).toBe(mockCredentials.user().principal.userEntityRef);
   });
 });
+```
+
+By default, `startTestBackend` attaches mock user credentials to every request so your `httpAuth.credentials(req, { allow: ['user'] })` calls succeed. If you want to test the unauthenticated path, configure the `httpAuth` mock to reject credentials or disable the default credentials injection.
+
+**Partial implementations** — pass a partial object to `.mock(...)` to override specific methods:
+
+```ts
+const httpAuthMock = mockServices.httpAuth.mock();
+httpAuthMock.credentials.mockRejectedValue(new Error('Unauthorized'));
 ```
 
 ---
 
 ## Testing Routers
 
-### Testing with Supertest
+### With the test backend + supertest
 
-Test Express routers directly:
+The preferred pattern is to exercise your router through the full plugin wiring:
 
 ```ts
+import { mockServices, startTestBackend } from '@backstage/backend-test-utils';
 import request from 'supertest';
-import express from 'express';
-import { createRouter } from './router';
-import { mockServices } from '@backstage/backend-test-utils';
+import { examplePlugin } from './plugin';
 
 describe('router', () => {
+  it('validates the request body', async () => {
+    const { server } = await startTestBackend({ features: [examplePlugin] });
+
+    const response = await request(server)
+      .post('/api/example/todos')
+      .send({ invalid: 'data' });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({ error: { name: 'InputError' } });
+  });
+});
+```
+
+### Standalone router testing (for granular unit tests)
+
+When you want to unit-test a router in isolation without booting a backend, construct one directly and give it mocked services:
+
+```ts
+import { mockServices, mockErrorHandler } from '@backstage/backend-test-utils';
+import express from 'express';
+import request from 'supertest';
+import { createRouter } from './router';
+
+describe('router unit', () => {
   let app: express.Express;
 
   beforeEach(async () => {
     const router = await createRouter({
       logger: mockServices.logger.mock(),
-      database: await mockServices.database.mock(),
+      database: mockServices.database.mock(),
       httpAuth: mockServices.httpAuth.mock(),
       userInfo: mockServices.userInfo.mock(),
     });
 
     app = express();
-    app.use('/api/example', router);
+    app.use(router);
+    app.use(mockErrorHandler()); // mimic the root error handler
   });
 
   it('returns health status', async () => {
-    const response = await request(app).get('/api/example/health');
-
-    expect(response.status).toBe(200);
-    expect(response.body).toEqual({ status: 'ok' });
-  });
-
-  it('validates request body', async () => {
-    const response = await request(app)
-      .post('/api/example/data')
-      .send({ invalid: 'data' });
-
-    expect(response.status).toBe(400);
-    expect(response.body).toHaveProperty('error');
+    await request(app).get('/health').expect(200);
   });
 });
 ```
 
-### Testing Authentication
-
-Mock authenticated requests:
-
-```ts
-import { mockServices } from '@backstage/backend-test-utils';
-
-describe('authenticated routes', () => {
-  it('requires authentication', async () => {
-    const mockHttpAuth = mockServices.httpAuth.mock({
-      credentials: jest.fn().mockRejectedValue(new Error('Unauthorized')),
-    });
-
-    const router = await createRouter({
-      logger: mockServices.logger.mock(),
-      httpAuth: mockHttpAuth,
-      userInfo: mockServices.userInfo.mock(),
-    });
-
-    const app = express();
-    app.use(router);
-
-    const response = await request(app).get('/protected');
-    expect(response.status).toBe(401);
-  });
-
-  it('allows authenticated users', async () => {
-    const mockHttpAuth = mockServices.httpAuth.mock({
-      credentials: jest.fn().mockResolvedValue({
-        principal: { type: 'user', userEntityRef: 'user:default/test' },
-      }),
-    });
-
-    const mockUserInfo = mockServices.userInfo.mock({
-      getUserInfo: jest.fn().mockResolvedValue({
-        userEntityRef: 'user:default/test',
-        ownershipEntityRefs: ['user:default/test'],
-      }),
-    });
-
-    const router = await createRouter({
-      logger: mockServices.logger.mock(),
-      httpAuth: mockHttpAuth,
-      userInfo: mockUserInfo,
-    });
-
-    const app = express();
-    app.use(router);
-
-    const response = await request(app).get('/protected');
-    expect(response.status).toBe(200);
-  });
-});
-```
+`mockErrorHandler` replaces the legacy `errorHandler` from `@backstage/backend-common`. Use it so thrown errors (like `InputError`, `NotFoundError`) are serialized the way production does.
 
 ---
 
 ## Testing External Services
 
-### Using MSW (Mock Service Worker)
+### Using MSW v2
 
-Intercept HTTP requests to external services:
+Intercept outgoing HTTP requests and return mock responses. The v2 API is `http.get/post/...` + `HttpResponse`:
 
 ```ts
+import { registerMswTestHooks, startTestBackend } from '@backstage/backend-test-utils';
+import { HttpResponse, http } from 'msw';
 import { setupServer } from 'msw/node';
-import { rest } from 'msw';
-import { registerMswTestHooks } from '@backstage/backend-test-utils';
-
-const server = setupServer();
-registerMswTestHooks(server);
+import request from 'supertest';
 
 describe('external API integration', () => {
-  it('fetches data from external API', async () => {
-    // Mock external API response
-    server.use(
-      rest.get('https://api.example.com/data', (req, res, ctx) => {
-        return res(
-          ctx.json({
-            id: '123',
-            name: 'Test Data',
-          })
-        );
-      })
+  const worker = setupServer();
+  registerMswTestHooks(worker);
+
+  it('fetches data from the external API', async () => {
+    worker.use(
+      http.get('https://api.example.com/data/:id', ({ params }) =>
+        HttpResponse.json({ id: params.id, name: 'Test Data' }),
+      ),
     );
 
-    const { server: testServer } = await startTestBackend({
-      features: [examplePlugin()],
-    });
+    const { server } = await startTestBackend({ features: [examplePlugin] });
 
-    const response = await testServer.request('/api/example/fetch/123');
-
+    const response = await request(server).get('/api/example/fetch/123');
     expect(response.status).toBe(200);
     expect(response.body.name).toBe('Test Data');
   });
 
-  it('handles API errors gracefully', async () => {
-    server.use(
-      rest.get('https://api.example.com/data', (req, res, ctx) => {
-        return res(ctx.status(500), ctx.json({ error: 'Server Error' }));
-      })
+  it('propagates external errors', async () => {
+    worker.use(
+      http.get('https://api.example.com/data/:id', () =>
+        HttpResponse.json({ error: 'Server Error' }, { status: 500 }),
+      ),
     );
 
-    const { server: testServer } = await startTestBackend({
-      features: [examplePlugin()],
-    });
+    const { server } = await startTestBackend({ features: [examplePlugin] });
 
-    const response = await testServer.request('/api/example/fetch/123');
-
+    const response = await request(server).get('/api/example/fetch/123');
     expect(response.status).toBe(500);
-    expect(response.body).toHaveProperty('error');
   });
 });
 ```
 
-### MSW Setup Helpers
-
-Use `registerMswTestHooks` for automatic cleanup:
-
-```ts
-import { setupServer } from 'msw/node';
-import { registerMswTestHooks } from '@backstage/backend-test-utils';
-
-const handlers = [
-  rest.get('https://api.example.com/*', (req, res, ctx) => {
-    return res(ctx.json({ mocked: true }));
-  }),
-];
-
-const server = setupServer(...handlers);
-
-// Automatically sets up beforeAll, afterAll, and afterEach hooks
-registerMswTestHooks(server);
-
-describe('tests', () => {
-  // Tests run with MSW handlers active
-});
-```
+`registerMswTestHooks` automatically wires `beforeAll`/`afterEach`/`afterAll` and enables `onUnhandledRequest: 'error'` so you catch accidental network calls.
 
 ---
 
@@ -374,60 +314,56 @@ describe('tests', () => {
 
 ### Using Test Databases
 
-Run tests against real database engines:
+`TestDatabases` (from `@backstage/backend-test-utils` — **not** a separate `test-databases` package) spins up real database engines via `testcontainers` for tests that need SQL fidelity:
+
+**How engines are provided**: for each engine, `TestDatabases` first checks a connection-string environment variable (e.g. `BACKSTAGE_TEST_DATABASE_POSTGRES16_CONNECTION_STRING`) and uses that server if set; otherwise it starts a throwaway container via testcontainers. Locally the testcontainers fallback works if Docker is running. In CI, always provide the connection string via a service container (see CI/CD Integration below): the testcontainers path loads native modules that can crash jest workers with SIGSEGV on Linux runners, and the service-container pattern is what Backstage core's own CI uses.
 
 ```ts
-import { TestDatabases } from '@backstage/backend-test-utils';
+import {
+  TestDatabaseId,
+  TestDatabases,
+} from '@backstage/backend-test-utils';
+import { MyDatabaseClass } from './MyDatabaseClass';
 
-describe('database integration', () => {
-  const databases = TestDatabases.create();
+describe('MyDatabaseClass', () => {
+  // Only set up the databases you actually need; each is a real Docker container.
+  const databases = TestDatabases.create({
+    ids: ['POSTGRES_14', 'SQLITE_3'],
+  });
+
+  async function createSubject(databaseId: TestDatabaseId) {
+    const knex = await databases.init(databaseId);
+    const subject = new MyDatabaseClass({ database: knex });
+    await subject.runMigrations();
+    return { knex, subject };
+  }
 
   it.each(databases.eachSupportedId())(
-    'works with %s',
+    'stores and reads foos on %p',
     async databaseId => {
-      const knex = await databases.init(databaseId);
-
-      // Run migrations
-      await knex.schema.createTable('users', table => {
-        table.increments('id').primary();
-        table.string('name').notNullable();
-      });
-
-      // Test database operations
-      await knex('users').insert({ name: 'Test User' });
-      const users = await knex('users').select('*');
-
-      expect(users).toHaveLength(1);
-      expect(users[0].name).toBe('Test User');
+      const { knex, subject } = await createSubject(databaseId);
+      await knex('foos').insert({ value: 2 });
+      await expect(subject.foos()).resolves.toEqual([{ value: 2 }]);
     },
-    60_000 // Timeout for database setup
+    60_000, // container spin-up can take a while
   );
 });
 ```
 
-**Supported Databases**:
-- PostgreSQL
-- MySQL
-- SQLite
-
-**How engines are provided**: for each engine, `TestDatabases` first checks a connection-string environment variable (e.g. `BACKSTAGE_TEST_DATABASE_POSTGRES16_CONNECTION_STRING`) and uses that server if set; otherwise it starts a throwaway container via testcontainers. Locally the testcontainers fallback works if Docker is running. In CI, always provide the connection string via a service container (see CI/CD Integration below): the testcontainers path loads native modules that can crash jest workers with SIGSEGV on Linux runners, and the service-container pattern is what Backstage core's own CI uses.
+Supported database ids include SQLite, Postgres (multiple versions), and MySQL. `databases.eachSupportedId()` iterates over every id registered in `create`.
 
 ### Repository Testing
 
-Test database repositories:
-
 ```ts
 import { mockServices } from '@backstage/backend-test-utils';
+import { UserRepository } from './UserRepository';
 
 describe('UserRepository', () => {
   let repository: UserRepository;
-  let database: DatabaseService;
 
   beforeEach(async () => {
-    database = await mockServices.database.mock();
+    const database = mockServices.database.mock();
     repository = new UserRepository(database);
-
-    // Setup schema
     const knex = await database.getClient();
     await knex.schema.createTable('users', table => {
       table.increments('id').primary();
@@ -436,39 +372,15 @@ describe('UserRepository', () => {
     });
   });
 
-  it('creates users', async () => {
-    const user = await repository.create({
-      email: 'test@example.com',
-      name: 'Test User',
-    });
-
+  it('creates, finds, and enforces uniqueness', async () => {
+    const user = await repository.create({ email: 'test@example.com', name: 'Test User' });
     expect(user.id).toBeDefined();
-    expect(user.email).toBe('test@example.com');
-  });
 
-  it('finds users by email', async () => {
-    await repository.create({
-      email: 'test@example.com',
-      name: 'Test User',
-    });
-
-    const user = await repository.findByEmail('test@example.com');
-
-    expect(user).toBeDefined();
-    expect(user?.name).toBe('Test User');
-  });
-
-  it('handles unique constraint violations', async () => {
-    await repository.create({
-      email: 'test@example.com',
-      name: 'Test User',
-    });
+    const found = await repository.findByEmail('test@example.com');
+    expect(found?.name).toBe('Test User');
 
     await expect(
-      repository.create({
-        email: 'test@example.com',
-        name: 'Another User',
-      })
+      repository.create({ email: 'test@example.com', name: 'Another User' }),
     ).rejects.toThrow();
   });
 });
@@ -478,25 +390,17 @@ describe('UserRepository', () => {
 
 ## Service Factory Testing
 
-### Testing Custom Services
-
-Test service factories in isolation:
+Test custom service factories in isolation with `ServiceFactoryTester`:
 
 ```ts
-import { ServiceFactoryTester } from '@backstage/backend-test-utils';
-import { myServiceRef, myServiceFactory } from './service';
+import {
+  ServiceFactoryTester,
+  mockServices,
+} from '@backstage/backend-test-utils';
+import { myServiceFactory } from './service';
 
 describe('myServiceFactory', () => {
-  it('creates service instance', async () => {
-    const tester = ServiceFactoryTester.from(myServiceFactory);
-
-    const service = await tester.get();
-
-    expect(service).toBeDefined();
-    expect(service.doSomething).toBeInstanceOf(Function);
-  });
-
-  it('uses dependencies correctly', async () => {
+  it('creates a working service', async () => {
     const tester = ServiceFactoryTester.from(myServiceFactory, {
       dependencies: [
         mockServices.logger.factory(),
@@ -506,9 +410,27 @@ describe('myServiceFactory', () => {
 
     const service = await tester.get();
     const result = await service.doSomething();
-
     expect(result).toBeDefined();
   });
+});
+```
+
+---
+
+## Testing Modules
+
+Modules are exercised by booting them with `startTestBackend` alongside the plugin they extend (or by registering a stub for the extension point they target):
+
+```ts
+import { startTestBackend } from '@backstage/backend-test-utils';
+import { catalogPlugin } from '@backstage/plugin-catalog-backend';
+import { exampleModuleCustomProcessor } from './module';
+
+it('registers the custom processor on the catalog', async () => {
+  const { server } = await startTestBackend({
+    features: [catalogPlugin, exampleModuleCustomProcessor],
+  });
+  // Drive the catalog and assert your processor ran.
 });
 ```
 
@@ -518,40 +440,26 @@ describe('myServiceFactory', () => {
 
 ### Full Backend Testing
 
-Test entire backend with multiple plugins:
+Test multiple plugins together:
 
 ```ts
 import { startTestBackend } from '@backstage/backend-test-utils';
-import { examplePlugin } from './plugin';
 import { catalogPlugin } from '@backstage/plugin-catalog-backend';
+import { examplePlugin } from './plugin';
+import request from 'supertest';
 
-describe('integration tests', () => {
-  it('integrates with catalog', async () => {
-    const { server } = await startTestBackend({
-      features: [
-        examplePlugin(),
-        catalogPlugin(),
-      ],
-    });
-
-    // Create entity in catalog
-    await server.request('/api/catalog/entities')
-      .post({
-        entity: {
-          apiVersion: 'backstage.io/v1alpha1',
-          kind: 'Component',
-          metadata: { name: 'test' },
-        },
-      });
-
-    // Use example plugin with catalog data
-    const response = await server.request('/api/example/component/test');
-
-    expect(response.status).toBe(200);
-    expect(response.body.name).toBe('test');
+it('looks up entities via the catalog', async () => {
+  const { server } = await startTestBackend({
+    features: [examplePlugin, catalogPlugin],
   });
+
+  // Seed the catalog, then exercise the example plugin against it.
+  const response = await request(server).get('/api/example/component/test');
+  expect(response.status).toBe(200);
 });
 ```
+
+For catalog interactions in particular, you can also stub the catalog with `catalogServiceMock.factory(...)` from `@backstage/plugin-catalog-node/testUtils` instead of spinning up the real plugin — that's what the `yarn new` scaffolded tests do.
 
 ---
 
@@ -559,110 +467,53 @@ describe('integration tests', () => {
 
 ### Test Organization
 
+Prefer a small number of thorough tests with multiple assertions per test over many tiny tests — this is both faster to run and easier to maintain:
+
 ```ts
-describe('PluginName', () => {
-  describe('initialization', () => {
-    it('starts successfully', () => { /* ... */ });
-    it('loads configuration', () => { /* ... */ });
-  });
+describe('examplePlugin', () => {
+  it('supports the full CRUD lifecycle', async () => {
+    const { server } = await startTestBackend({ features: [examplePlugin] });
 
-  describe('endpoints', () => {
-    describe('GET /data', () => {
-      it('returns data', () => { /* ... */ });
-      it('validates query parameters', () => { /* ... */ });
-      it('handles errors', () => { /* ... */ });
-    });
+    // Create
+    const createRes = await request(server).post('/api/example/todos').send({ title: 'x' });
+    expect(createRes.status).toBe(201);
+    const id = createRes.body.id;
 
-    describe('POST /data', () => {
-      it('creates data', () => { /* ... */ });
-      it('validates request body', () => { /* ... */ });
-      it('requires authentication', () => { /* ... */ });
-    });
-  });
+    // Read
+    await request(server).get(`/api/example/todos/${id}`).expect(200);
 
-  describe('database', () => {
-    it('stores data correctly', () => { /* ... */ });
-    it('enforces constraints', () => { /* ... */ });
+    // Update, delete, and so on…
   });
 });
 ```
 
 ### Async Cleanup
 
-Always clean up async operations:
-
-```ts
-describe('async operations', () => {
-  let cleanup: () => Promise<void>;
-
-  afterEach(async () => {
-    if (cleanup) {
-      await cleanup();
-    }
-  });
-
-  it('performs async work', async () => {
-    const { server, stop } = await startTestBackend({
-      features: [examplePlugin()],
-    });
-
-    cleanup = stop;
-
-    // Perform tests
-  });
-});
-```
+`startTestBackend` manages its own lifecycle — you typically don't need to stop the server manually. If your tests start additional resources (timers, interval tasks), clean them up in `afterEach`.
 
 ### Mock Reset
 
-Reset mocks between tests:
-
 ```ts
-describe('tests', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-  });
+beforeEach(() => {
+  jest.clearAllMocks();
+});
 
-  afterEach(() => {
-    jest.restoreAllMocks();
-  });
-
-  // Tests...
+afterEach(() => {
+  jest.restoreAllMocks();
 });
 ```
 
 ### Error Testing
 
-Test error scenarios:
+Use `supertest` to assert error status and the shape of the error body produced by the root handler:
 
 ```ts
-describe('error handling', () => {
-  it('returns 404 for missing data', async () => {
-    const response = await request(app).get('/api/example/data/nonexistent');
+it('returns 400 for invalid input', async () => {
+  const { server } = await startTestBackend({ features: [examplePlugin] });
 
-    expect(response.status).toBe(404);
-    expect(response.body).toHaveProperty('error');
-  });
-
-  it('returns 400 for invalid input', async () => {
-    const response = await request(app)
-      .post('/api/example/data')
-      .send({ invalid: 'schema' });
-
-    expect(response.status).toBe(400);
-    expect(response.body.error).toContain('validation');
-  });
-
-  it('handles database errors', async () => {
-    const mockDb = mockServices.database.mock();
-    jest.spyOn(mockDb, 'getClient').mockRejectedValue(new Error('DB Error'));
-
-    const router = await createRouter({ database: mockDb });
-
-    const response = await request(app).get('/api/example/data');
-
-    expect(response.status).toBe(500);
-  });
+  const response = await request(server).post('/api/example/todos').send({ invalid: 'schema' });
+  expect(response.status).toBe(400);
+  expect(response.body).toMatchObject({ error: { name: 'InputError' } });
 });
 ```
 
@@ -672,22 +523,24 @@ describe('error handling', () => {
 
 ### Command Line
 
+From the plugin directory:
+
 ```bash
 # Run all tests (--watchAll=false prevents jest watch mode, which never exits in CI/agents)
 yarn backstage-cli package test --watchAll=false
-
-# Run tests in watch mode
 yarn backstage-cli package test --watch
-
-# Run with coverage
 yarn backstage-cli package test --coverage --watchAll=false
-
-# Run specific test file
 yarn backstage-cli package test router.test.ts --watchAll=false
-
-# Run tests matching pattern
 yarn backstage-cli package test --testNamePattern="authentication" --watchAll=false
 ```
+
+From the repo root:
+
+```bash
+CI=1 yarn test <path>
+```
+
+Always pass a path — never run the full suite.
 
 ### CI/CD Integration
 
@@ -699,7 +552,6 @@ on: [push, pull_request]
 jobs:
   test:
     runs-on: ubuntu-latest
-
     services:
       # Provides postgres for TestDatabases via the connection-string env var
       # below. Without the env var, TestDatabases falls back to testcontainers,
@@ -715,82 +567,60 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-
       - run: yarn install --immutable
       - run: yarn backstage-cli package test --coverage
         env:
           BACKSTAGE_TEST_DATABASE_POSTGRES16_CONNECTION_STRING: postgresql://postgres:postgres@localhost:5432
-
-      - uses: codecov/codecov-action@v3
-        with:
-          files: ./coverage/clover.xml
 ```
 
 ---
 
 ## Common Testing Patterns
 
-### Testing Pagination
+### Testing Scheduled Tasks
+
+Capture the function passed to `scheduler.scheduleTask` and invoke it manually:
 
 ```ts
-describe('pagination', () => {
-  it('returns first page', async () => {
-    // Create test data
-    for (let i = 0; i < 50; i++) {
-      await createData({ name: `Item ${i}` });
-    }
+import { mockServices, startTestBackend } from '@backstage/backend-test-utils';
 
-    const response = await request(app)
-      .get('/api/example/data')
-      .query({ limit: 10, offset: 0 });
-
-    expect(response.body.items).toHaveLength(10);
-    expect(response.body.total).toBe(50);
+it('runs the cleanup task', async () => {
+  const mockScheduler = mockServices.scheduler.mock();
+  let taskFn: (() => Promise<void>) | undefined;
+  mockScheduler.scheduleTask.mockImplementation(async ({ fn }) => {
+    taskFn = fn as () => Promise<void>;
+    return { unschedule: jest.fn() };
   });
 
-  it('returns subsequent pages', async () => {
-    const response = await request(app)
-      .get('/api/example/data')
-      .query({ limit: 10, offset: 10 });
+  await startTestBackend({ features: [examplePlugin, mockScheduler.factory] });
 
-    expect(response.body.items).toHaveLength(10);
-    expect(response.body.items[0].name).toBe('Item 10');
-  });
+  expect(taskFn).toBeDefined();
+  await taskFn!();
+  // Assert the side effects of the cleanup task here.
 });
 ```
 
-### Testing Scheduled Tasks
+### Testing Pagination
 
 ```ts
-describe('scheduled tasks', () => {
-  it('runs task on schedule', async () => {
-    jest.useFakeTimers();
+it('paginates the todo list', async () => {
+  const { server } = await startTestBackend({ features: [examplePlugin] });
 
-    const mockScheduler = mockServices.scheduler.mock();
-    let taskFn: () => Promise<void>;
+  for (let i = 0; i < 50; i++) {
+    await request(server).post('/api/example/todos').send({ title: `Item ${i}` });
+  }
 
-    mockScheduler.scheduleTask.mockImplementation(async ({ fn }) => {
-      taskFn = fn;
-    });
+  const first = await request(server).get('/api/example/todos').query({ limit: 10, offset: 0 });
+  expect(first.body.items).toHaveLength(10);
+  expect(first.body.total).toBe(50);
 
-    await startTestBackend({
-      features: [examplePlugin(), mockScheduler.factory],
-    });
-
-    // Manually trigger task
-    await taskFn!();
-
-    // Verify task executed
-    expect(mockLogger.info).toHaveBeenCalledWith('Task executed');
-
-    jest.useRealTimers();
-  });
+  const second = await request(server).get('/api/example/todos').query({ limit: 10, offset: 10 });
+  expect(second.body.items[0].title).toBe('Item 10');
 });
 ```
 
@@ -798,7 +628,6 @@ describe('scheduled tasks', () => {
 
 ## Official Documentation
 
-For comprehensive testing guidance:
-- [Testing Backend Plugins](https://backstage.io/docs/backend-system/building-plugins-and-modules/testing/)
-- [Backend Test Utils](https://backstage.io/docs/reference/backend-test-utils/)
-- [Testing with Jest](https://backstage.io/docs/plugins/testing/)
+- [Testing Backend Plugins and Modules](https://backstage.io/docs/backend-system/building-plugins-and-modules/testing/) — canonical guide.
+- [Backend Test Utils reference](https://backstage.io/docs/reference/backend-test-utils/) — typed API.
+- [MSW v2 docs](https://mswjs.io/) — external-request mocking.

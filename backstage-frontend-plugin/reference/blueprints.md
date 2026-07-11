@@ -2,7 +2,16 @@
 
 ## Overview
 
-Extension blueprints provide a `make` method to create new extensions and are the recommended approach for creating extensions in Backstage's frontend system. Blueprints replaced the older "extension creator" pattern, providing a more consistent and powerful API surface for both plugin builders and integrators.
+Extension blueprints expose a `make` method to create extensions and are the recommended way to add functionality to a Backstage frontend plugin. Each blueprint is a typed factory that enforces the inputs, outputs, and attachment point of the extensions it produces.
+
+Blueprints live in several packages depending on what they extend:
+
+| Package | Blueprints |
+| ------- | ---------- |
+| `@backstage/frontend-plugin-api` | `PageBlueprint`, `SubPageBlueprint`, `ApiBlueprint`, `AppRootElementBlueprint`, `PluginHeaderActionBlueprint`, `NavItemBlueprint` (deprecated) |
+| `@backstage/frontend-plugin-api/alpha` | `PluginWrapperBlueprint` |
+| `@backstage/plugin-app-react` | `ThemeBlueprint`, `SignInPageBlueprint`, `IconBundleBlueprint`, `TranslationBlueprint`, `RouterBlueprint`, `AppRootWrapperBlueprint`, `NavContentBlueprint`, `SwappableComponentBlueprint`, `AnalyticsImplementationBlueprint` |
+| `@backstage/plugin-catalog-react/alpha` | `EntityContentBlueprint`, `EntityCardBlueprint`, `EntityHeaderBlueprint`, `EntityContentLayoutBlueprint`, `EntityContextMenuItemBlueprint`, `EntityIconLinkBlueprint`, `CatalogFilterBlueprint` |
 
 ---
 
@@ -10,68 +19,66 @@ Extension blueprints provide a `make` method to create new extensions and are th
 
 ### PageBlueprint
 
-Creates page extensions that render at specific routes.
+Creates page extensions that render at specific routes. Also acts as a container when used without a `loader` — child `SubPageBlueprint` extensions render as tabs under it.
 
 **Package**: `@backstage/frontend-plugin-api`
 
 **Key Features**:
-- Default path configuration
-- Always dynamically loaded using `React.lazy()`
-- Integration with route references
+- Default path configuration (overridable via app-config)
+- Lazy loading via dynamic imports (no manual `React.lazy` needed)
+- Automatic sidebar entry when `title` + `icon` are provided
+- Tabbed sub-pages when combined with `SubPageBlueprint`
 
 **Usage Pattern**:
 
 ```tsx
 import { PageBlueprint } from '@backstage/frontend-plugin-api';
+import ExampleIcon from '@material-ui/icons/Extension';
 import { rootRouteRef } from './routes';
 
 const examplePage = PageBlueprint.make({
   params: {
     routeRef: rootRouteRef,
     path: '/example',
+    title: 'Example',          // becomes sidebar label + page header
+    icon: ExampleIcon,         // becomes sidebar icon
     loader: () => import('./components/ExamplePage').then(m => <m.ExamplePage />),
   },
 });
 ```
 
 **Parameters**:
-- `routeRef`: Route reference for navigation
-- `path`: URL path for the page
-- `loader`: Async component loader function
+- `path` (required): URL path for the page.
+- `routeRef` (optional): Route reference for external linking.
+- `title`, `icon` (optional): Drive the page header and auto-generated sidebar entry.
+- `loader` (optional): Async component loader. Omit to build a tabbed parent — see `SubPageBlueprint`.
+- `noHeader` (optional): Hide the default plugin page header so the page fills the viewport.
 
 ---
 
-### NavItemBlueprint
+### SubPageBlueprint
 
-Creates navigation items, typically rendered in the sidebar.
+Creates a tab under a parent `PageBlueprint` that has no `loader`.
 
 **Package**: `@backstage/frontend-plugin-api`
-
-**Key Features**:
-- Integrates with `app.nav` extension
-- Default sidebar rendering
-- Route-aware navigation
 
 **Usage Pattern**:
 
 ```tsx
-import { NavItemBlueprint } from '@backstage/frontend-plugin-api';
-import { rootRouteRef } from './routes';
-import ExampleIcon from '@material-ui/icons/Extension';
+import { SubPageBlueprint } from '@backstage/frontend-plugin-api';
 
-const exampleNavItem = NavItemBlueprint.make({
+const overviewTab = SubPageBlueprint.make({
+  name: 'overview',
   params: {
-    routeRef: rootRouteRef,
-    title: 'Example',
-    icon: ExampleIcon,
+    path: '',           // relative to the parent page's path
+    title: 'Overview',  // the tab label
+    loader: () =>
+      import('./components/Overview').then(m => <m.Overview />),
   },
 });
 ```
 
-**Parameters**:
-- `routeRef`: Route reference to navigate to
-- `title`: Display text for navigation item
-- `icon`: MUI icon component or custom SVG icon
+Register the parent page (no `loader`) and all sub-pages in the plugin's `extensions` array; the parent page renders a tab bar whose contents come from the sub-pages' output.
 
 ---
 
@@ -80,11 +87,6 @@ const exampleNavItem = NavItemBlueprint.make({
 Creates content tabs for entity pages in the catalog plugin.
 
 **Package**: `@backstage/plugin-catalog-react/alpha`
-
-**Key Features**:
-- Renders on entity pages
-- Tab-based navigation
-- Entity-aware context
 
 **Usage Pattern**:
 
@@ -97,19 +99,28 @@ const exampleEntityContent = EntityContentBlueprint.make({
     title: 'Example',
     loader: () =>
       import('./components/ExampleEntityContent').then(m => <m.ExampleEntityContent />),
+    // Optional: restrict to a set of entity kinds/types.
+    // The filter value accepts entity ref or query strings such as 'kind:component,api'.
+    // filter: 'kind:component',
+    // Optional: assign to a named tab group (e.g. 'overview', 'development').
+    // group: 'overview',
+    // Optional: icon shown in the tab strip.
+    // icon: ExampleIcon,
   },
 });
 ```
 
 **Parameters**:
-- `path`: Tab path segment
-- `title`: Tab display name
-- `loader`: Async component loader function
+- `path`, `title`, `loader` (required).
+- `routeRef` (optional): Route reference for external linking.
+- `icon` (optional): Icon for the tab.
+- `filter` (optional): Limit which entities show the content.
+- `group` (optional): Tab-group key; see `defaultEntityContentGroups` for the built-in groups.
 
 **Best Practices**:
 - Keep entity content extensions small and focused
 - Avoid heavy logic in loaders
-- Use permissions to control visibility
+- Use `usePermission` to control visibility for sensitive content
 - Handle missing entity data gracefully
 
 ---
@@ -120,42 +131,45 @@ Creates Utility API extensions for shared logic across plugins.
 
 **Package**: `@backstage/frontend-plugin-api`
 
-**Key Features**:
-- Advanced parameter types
-- Dependency injection support
-- Factory pattern for API instantiation
-
 **Usage Pattern**:
 
 ```tsx
 import { ApiBlueprint } from '@backstage/frontend-plugin-api';
+import { discoveryApiRef, fetchApiRef } from '@backstage/frontend-plugin-api';
 import { exampleApiRef, DefaultExampleApi } from './api';
 
 const exampleApi = ApiBlueprint.make({
   name: 'example',
-  params: define =>
-    define({
+  params: defineParams =>
+    defineParams({
       api: exampleApiRef,
       deps: {
-        // Optional dependencies on other APIs
         discoveryApi: discoveryApiRef,
+        fetchApi: fetchApiRef,
       },
-      factory: ({ discoveryApi }) => new DefaultExampleApi({ discoveryApi }),
+      factory: ({ discoveryApi, fetchApi }) =>
+        new DefaultExampleApi({ discoveryApi, fetchApi }),
     }),
 });
 ```
 
 **Parameters**:
-- `name`: Unique identifier for the API extension
-- `params`: Define callback for advanced configuration
-  - `api`: API reference created with `createApiRef`
-  - `deps`: Dependencies on other APIs
-  - `factory`: Function to instantiate the API implementation
+- `name`: Unique identifier for the API extension within the plugin.
+- `params`: `defineParams` callback returning:
+  - `api`: API reference created with `createApiRef`.
+  - `deps`: Map of other API refs this implementation depends on.
+  - `factory`: Function that receives resolved deps and returns the API implementation.
+
+The callback parameter is named `defineParams` everywhere in upstream docs and plugin source — stick to that name for consistency.
 
 **API Reference Pattern**:
 
 ```tsx
 import { createApiRef } from '@backstage/frontend-plugin-api';
+import type {
+  DiscoveryApi,
+  FetchApi,
+} from '@backstage/frontend-plugin-api';
 
 export interface ExampleApi {
   fetchData(id: string): Promise<Data>;
@@ -163,21 +177,66 @@ export interface ExampleApi {
 }
 
 export const exampleApiRef = createApiRef<ExampleApi>({
-  id: 'plugin.example',
+  id: 'plugin.example.api',
 });
 
 export class DefaultExampleApi implements ExampleApi {
-  constructor(private options: { discoveryApi: DiscoveryApi }) {}
+  constructor(
+    private options: { discoveryApi: DiscoveryApi; fetchApi: FetchApi },
+  ) {}
 
   async fetchData(id: string): Promise<Data> {
-    // Implementation
+    const baseUrl = await this.options.discoveryApi.getBaseUrl('example');
+    const res = await this.options.fetchApi.fetch(`${baseUrl}/data/${id}`);
+    if (!res.ok) throw new Error(`Failed to fetch: ${res.statusText}`);
+    return res.json();
   }
 
   async updateData(id: string, data: Data): Promise<void> {
-    // Implementation
+    const baseUrl = await this.options.discoveryApi.getBaseUrl('example');
+    const res = await this.options.fetchApi.fetch(`${baseUrl}/data/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) throw new Error(`Failed to update: ${res.statusText}`);
   }
 }
 ```
+
+---
+
+### PluginHeaderActionBlueprint
+
+Adds an action (button, menu item, etc.) to a specific plugin page's header.
+
+**Package**: `@backstage/frontend-plugin-api`
+
+Use for things like "Create new", "Export", "Open settings" buttons that live next to the plugin page title. Actions are scoped to the plugin they are defined in — the action only appears when one of that plugin's pages is the active route.
+
+---
+
+### NavItemBlueprint (deprecated)
+
+Previously used to add entries to the sidebar. **Now deprecated** — nav items are auto-inferred from `PageBlueprint` extensions (and plugin-level `title`/`icon`).
+
+If you have legacy code using `NavItemBlueprint`, remove it and set `title` and `icon` on your `PageBlueprint.params` instead.
+
+---
+
+## App-level Blueprints (`@backstage/plugin-app-react`)
+
+These are most often used by app integrators and by plugins that customize the app shell:
+
+- **`ThemeBlueprint`** — Register a new theme (e.g. a company-branded theme).
+- **`SignInPageBlueprint`** — Provide a custom sign-in page.
+- **`IconBundleBlueprint`** — Extend the global icon registry with custom named icons.
+- **`TranslationBlueprint`** — Register translation resources for i18n.
+- **`RouterBlueprint`** — Swap the router implementation.
+- **`AppRootWrapperBlueprint`** — Wrap the app root with custom providers.
+- **`NavContentBlueprint`** — Customize what renders inside the sidebar.
+- **`SwappableComponentBlueprint`** — Register a component that integrators can swap.
+- **`AnalyticsImplementationBlueprint`** — Provide a custom analytics backend (the core API ref for analytics lives in `@backstage/core-plugin-api`; the blueprint is the NFS registration mechanism).
 
 ---
 
@@ -185,44 +244,35 @@ export class DefaultExampleApi implements ExampleApi {
 
 ### makeWithOverrides
 
-Every extension blueprint provides a `makeWithOverrides` method for creating extensions with additional integration points.
+Every extension blueprint also exposes a `makeWithOverrides` method, used when authoring a reusable blueprint that exposes additional inputs, outputs, or config to integrators. It is **not** the same as `make` + a `config` option — it extends the underlying blueprint definition. Most plugin code uses plain `.make(...)`; reach for `makeWithOverrides` only when building infrastructure that other plugins consume.
 
-**Usage**:
+For authoring brand-new blueprints, see `createExtensionBlueprint` (also exported from `@backstage/frontend-plugin-api`). This is the primitive that all built-in blueprints use under the hood.
 
-```tsx
-const customPage = PageBlueprint.makeWithOverrides({
-  params: {
-    routeRef: rootRouteRef,
-    path: '/custom',
-    loader: () => import('./components/CustomPage').then(m => <m.CustomPage />),
-  },
-  config: {
-    // Additional configuration schema
-  },
-});
-```
+### Config schema
 
-**When to Use**:
-- Need custom configuration options
-- Require additional extension points
-- Building reusable extension templates
+Extensions can expose a Zod config schema so integrators can tweak them from `app-config.yaml`. Most built-in blueprints expose at least `path`/`title` overrides — see the docs for [Common Extension Blueprints](https://backstage.io/docs/frontend-system/building-plugins/common-extension-blueprints/) for what each blueprint lets you override.
+
+### attachTo
+
+Every extension has an `attachTo` that points to a parent node in the extension tree. For blueprints, the default attachment is set by the blueprint itself — e.g. `PageBlueprint` attaches to `app/routes`, `NavItemBlueprint` attaches to `app/nav`. You rarely need to override it directly, but it is exposed on `make` if you do need a non-default parent (for example, routing a page under a different parent).
 
 ---
 
 ## Extension Registration
 
-All extensions created with blueprints must be registered in the plugin definition:
+All extensions created with blueprints must be listed in the plugin's `extensions` array:
 
 ```tsx
 import { createFrontendPlugin } from '@backstage/frontend-plugin-api';
 
 export const examplePlugin = createFrontendPlugin({
   pluginId: 'example',
+  // Plugin-level title/icon become the fallback for auto-inferred nav entries.
+  title: 'Example',
   extensions: [
     examplePage,
-    exampleNavItem,
-    exampleEntityContent,
     exampleApi,
+    exampleEntityContent,
   ],
   routes: {
     root: rootRouteRef,
@@ -230,57 +280,45 @@ export const examplePlugin = createFrontendPlugin({
 });
 ```
 
+`createFrontendPlugin` also accepts `externalRoutes`, `featureFlags`, `if` (for conditional feature loading), and `info` (a loader that returns plugin metadata).
+
 ---
 
 ## Best Practices
 
 ### Lazy Loading
 
-Always use dynamic imports in loader functions to enable code splitting:
+Always use dynamic imports in loader functions to enable code splitting. The blueprint handles the `React.lazy`/`Suspense` wiring for you:
 
 ```tsx
 // Good
-loader: () => import('./components/Page').then(m => <m.Page />)
+loader: () => import('./components/Page').then(m => <m.Page />),
 
-// Bad - defeats code splitting
+// Bad - no code splitting, imported eagerly
 import { Page } from './components/Page';
-loader: () => <Page />
-```
-
-### Error Boundaries
-
-Wrap lazy-loaded components in error boundaries:
-
-```tsx
-import { ErrorBoundary } from '@backstage/core-components';
-import React from 'react';
-
-const LazyComponent = React.lazy(() => import('./components/Component'));
-
-function SafeComponent() {
-  return (
-    <ErrorBoundary>
-      <React.Suspense fallback={<div>Loading...</div>}>
-        <LazyComponent />
-      </React.Suspense>
-    </ErrorBoundary>
-  );
-}
+loader: () => Promise.resolve(<Page />),
 ```
 
 ### Route Organization
 
-Keep all route references in a dedicated `src/routes.ts` file:
+Keep all route references in `src/routes.ts`:
 
 ```tsx
-// src/routes.ts
-import { createRouteRef, createSubRouteRef } from '@backstage/frontend-plugin-api';
+import {
+  createRouteRef,
+  createSubRouteRef,
+  createExternalRouteRef,
+} from '@backstage/frontend-plugin-api';
 
 export const rootRouteRef = createRouteRef();
+
 export const detailsRouteRef = createSubRouteRef({
   parent: rootRouteRef,
   path: '/details/:id',
 });
+
+// For linking into other plugins that the integrator binds at app creation.
+export const catalogEntityRouteRef = createExternalRouteRef();
 ```
 
 ### Extension Naming
@@ -290,11 +328,11 @@ Use descriptive names that reflect the extension's purpose:
 ```tsx
 // Good
 const userDashboardPage = PageBlueprint.make({ ... });
-const settingsNavItem = NavItemBlueprint.make({ ... });
+const searchSettingsApi = ApiBlueprint.make({ name: 'settings', ... });
 
 // Bad
 const page1 = PageBlueprint.make({ ... });
-const nav = NavItemBlueprint.make({ ... });
+const api = ApiBlueprint.make({ ... });
 ```
 
 ---
@@ -319,43 +357,41 @@ export function ConditionalEntityContent() {
 }
 ```
 
-### Permission-Based Visibility
+Prefer using `EntityContentBlueprint`'s `filter` param when possible — it avoids rendering the tab at all for non-matching entities.
 
-Control access using permissions:
+### Permission-Based Visibility
 
 ```tsx
 import { usePermission } from '@backstage/plugin-permission-react';
 import { examplePermission } from './permissions';
 
 export function PermissionGatedContent() {
-  const { loading, allowed } = usePermission({
-    permission: examplePermission,
-  });
-
+  const { loading, allowed } = usePermission({ permission: examplePermission });
   if (loading) return null;
   if (!allowed) return <div>Access denied</div>;
-
   return <div>Protected content</div>;
 }
 ```
 
 ### API Consumption
 
-Use Utility APIs in components:
+Use Utility APIs in components via `useApi` imported from `@backstage/frontend-plugin-api`:
 
 ```tsx
-import { useApi } from '@backstage/core-plugin-api';
+import { useApi } from '@backstage/frontend-plugin-api';
+import { useAsync } from 'react-use';
 import { exampleApiRef } from './api';
 
-export function DataComponent() {
+export function DataComponent({ id }: { id: string }) {
   const exampleApi = useApi(exampleApiRef);
-  const [data, setData] = React.useState(null);
+  const { value, loading, error } = useAsync(
+    () => exampleApi.fetchData(id),
+    [exampleApi, id],
+  );
 
-  React.useEffect(() => {
-    exampleApi.fetchData('123').then(setData);
-  }, [exampleApi]);
-
-  return <div>{data?.name}</div>;
+  if (loading) return <div>Loading…</div>;
+  if (error) return <div>Error: {error.message}</div>;
+  return <div>{value?.name}</div>;
 }
 ```
 
@@ -366,4 +402,5 @@ export function DataComponent() {
 For the latest information, consult:
 - [Frontend Extension Blueprints](https://backstage.io/docs/frontend-system/architecture/extension-blueprints/)
 - [Common Extension Blueprints](https://backstage.io/docs/frontend-system/building-plugins/common-extension-blueprints/)
-- [Building Frontend Plugins](https://backstage.io/docs/frontend-system/building-plugins/index/)
+- [Building Frontend Plugins](https://backstage.io/docs/frontend-system/building-plugins/)
+- [Utility APIs](https://backstage.io/docs/frontend-system/utility-apis/)

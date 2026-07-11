@@ -2,7 +2,9 @@
 
 ## Overview
 
-Utility APIs provide shared logic and services across Backstage frontend plugins. They enable dependency injection, service abstraction, and clean separation of concerns. Utility APIs are the recommended pattern for accessing external services, managing state, and sharing functionality between components.
+Utility APIs provide shared logic and services across Backstage frontend plugins. They enable dependency injection, service abstraction, and clean separation between presentational components and data access. Utility APIs are the recommended pattern for accessing external services, managing in-app state, and sharing functionality between components.
+
+In the New Frontend System (NFS), import everything related to Utility APIs from `@backstage/frontend-plugin-api`: `createApiRef`, `useApi`, `ApiBlueprint`, and the built-in refs (`discoveryApiRef`, `fetchApiRef`, `identityApiRef`, `storageApiRef`, `alertApiRef`, `errorApiRef`, etc.). They are still re-exported from `@backstage/core-plugin-api` for legacy compatibility, but NFS code should use the `frontend-plugin-api` import path.
 
 ---
 
@@ -15,25 +17,13 @@ Create a TypeScript interface that defines the contract:
 ```tsx
 // src/api.ts
 export interface ExampleApi {
-  /**
-   * Fetch data by ID
-   * @param id - The unique identifier
-   * @returns Promise resolving to the data
-   */
+  /** Fetch data by ID. */
   fetchData(id: string): Promise<Data>;
 
-  /**
-   * Update data
-   * @param id - The unique identifier
-   * @param data - The data to update
-   */
+  /** Update data. */
   updateData(id: string, data: Partial<Data>): Promise<void>;
 
-  /**
-   * Subscribe to data changes
-   * @param callback - Function called when data changes
-   * @returns Unsubscribe function
-   */
+  /** Subscribe to data changes; returns an unsubscribe function. */
   subscribe(callback: (data: Data) => void): () => void;
 }
 ```
@@ -46,25 +36,28 @@ Use `createApiRef` to create a unique reference:
 import { createApiRef } from '@backstage/frontend-plugin-api';
 
 export const exampleApiRef = createApiRef<ExampleApi>({
-  id: 'plugin.example', // Must be unique across all plugins
+  id: 'plugin.example.api', // Must be unique across all plugins.
 });
 ```
 
-**Naming Convention**: Use `plugin.<pluginId>` for plugin-specific APIs.
+**Naming Convention**: Use `plugin.<pluginId>.<apiName>` for plugin-specific APIs. The trailing segment disambiguates when a plugin exposes multiple APIs.
 
 ### Step 3: Implement the API
 
-Create a default implementation:
+Create a default implementation. Dependencies come in via the constructor so tests can substitute them:
 
 ```tsx
-import type { DiscoveryApi, FetchApi } from '@backstage/core-plugin-api';
+import type {
+  DiscoveryApi,
+  FetchApi,
+} from '@backstage/frontend-plugin-api';
 
 export class DefaultExampleApi implements ExampleApi {
   constructor(
     private readonly options: {
       discoveryApi: DiscoveryApi;
       fetchApi: FetchApi;
-    }
+    },
   ) {}
 
   async fetchData(id: string): Promise<Data> {
@@ -75,7 +68,7 @@ export class DefaultExampleApi implements ExampleApi {
       throw new Error(`Failed to fetch data: ${response.statusText}`);
     }
 
-    return await response.json();
+    return response.json();
   }
 
   async updateData(id: string, data: Partial<Data>): Promise<void> {
@@ -92,12 +85,10 @@ export class DefaultExampleApi implements ExampleApi {
   }
 
   subscribe(callback: (data: Data) => void): () => void {
-    // Implementation of subscription logic
-    const intervalId = setInterval(async () => {
-      // Poll for changes or use websockets
+    const interval = setInterval(async () => {
+      // Poll for changes, or use websockets in a real impl.
     }, 5000);
-
-    return () => clearInterval(intervalId);
+    return () => clearInterval(interval);
   }
 }
 ```
@@ -107,15 +98,19 @@ export class DefaultExampleApi implements ExampleApi {
 Create an extension using `ApiBlueprint`:
 
 ```tsx
-// src/plugin.ts
-import { ApiBlueprint } from '@backstage/frontend-plugin-api';
+// src/plugin.tsx
+import {
+  ApiBlueprint,
+  createFrontendPlugin,
+  discoveryApiRef,
+  fetchApiRef,
+} from '@backstage/frontend-plugin-api';
 import { exampleApiRef, DefaultExampleApi } from './api';
-import { discoveryApiRef, fetchApiRef } from '@backstage/core-plugin-api';
 
 const exampleApi = ApiBlueprint.make({
   name: 'example',
-  params: define =>
-    define({
+  params: defineParams =>
+    defineParams({
       api: exampleApiRef,
       deps: {
         discoveryApi: discoveryApiRef,
@@ -128,9 +123,11 @@ const exampleApi = ApiBlueprint.make({
 
 export const examplePlugin = createFrontendPlugin({
   pluginId: 'example',
-  extensions: [exampleApi, /* other extensions */],
+  extensions: [exampleApi /* other extensions */],
 });
 ```
+
+The callback parameter is called `defineParams` in every upstream doc and in every real-world plugin. Using that name makes the code consistent with what a reader will find elsewhere in the codebase.
 
 ---
 
@@ -141,7 +138,7 @@ export const examplePlugin = createFrontendPlugin({
 Use the `useApi` hook to access APIs:
 
 ```tsx
-import { useApi } from '@backstage/core-plugin-api';
+import { useApi } from '@backstage/frontend-plugin-api';
 import { exampleApiRef } from './api';
 
 export function DataComponent({ id }: { id: string }) {
@@ -173,7 +170,7 @@ export function DataComponent({ id }: { id: string }) {
     };
   }, [exampleApi, id]);
 
-  if (loading) return <div>Loading...</div>;
+  if (loading) return <div>Loading…</div>;
   if (error) return <div>Error: {error.message}</div>;
   if (!data) return null;
 
@@ -181,37 +178,12 @@ export function DataComponent({ id }: { id: string }) {
 }
 ```
 
-### With Suspense
+### In Custom Hooks (preferred)
 
-Use React Suspense for cleaner async handling:
-
-```tsx
-import { useApi } from '@backstage/core-plugin-api';
-import { exampleApiRef } from './api';
-
-function DataComponent({ id }: { id: string }) {
-  const exampleApi = useApi(exampleApiRef);
-  const data = React.use(exampleApi.fetchData(id)); // React 19+
-
-  return <div>{data.name}</div>;
-}
-
-// Wrap with Suspense
-function DataWrapper() {
-  return (
-    <React.Suspense fallback={<div>Loading...</div>}>
-      <DataComponent id="123" />
-    </React.Suspense>
-  );
-}
-```
-
-### In Custom Hooks
-
-Encapsulate API logic in custom hooks:
+Most Backstage plugin code encapsulates API access in a hook that uses `react-use`'s `useAsync`. This keeps components simple and handles loading/error state for you:
 
 ```tsx
-import { useApi } from '@backstage/core-plugin-api';
+import { useApi } from '@backstage/frontend-plugin-api';
 import { useAsync } from 'react-use';
 import { exampleApiRef } from './api';
 
@@ -220,22 +192,23 @@ export function useExampleData(id: string) {
 
   const { value, loading, error } = useAsync(
     () => exampleApi.fetchData(id),
-    [exampleApi, id]
+    [exampleApi, id],
   );
 
   return { data: value, loading, error };
 }
 
-// Usage in component
+// Usage in a component
 function DataComponent({ id }: { id: string }) {
   const { data, loading, error } = useExampleData(id);
 
-  if (loading) return <div>Loading...</div>;
+  if (loading) return <div>Loading…</div>;
   if (error) return <div>Error: {error.message}</div>;
-
   return <div>{data?.name}</div>;
 }
 ```
+
+`react-use` is a standard scaffolded dependency for Backstage frontend plugins; `useAsync` is the idiomatic choice.
 
 ---
 
@@ -258,22 +231,18 @@ export class DefaultApiClient implements ApiClient {
     private readonly options: {
       discoveryApi: DiscoveryApi;
       fetchApi: FetchApi;
-    }
+    },
   ) {}
 
-  private async getBaseUrl(): Promise<string> {
+  private getBaseUrl(): Promise<string> {
     return this.options.discoveryApi.getBaseUrl('example');
   }
 
   async get<T>(path: string): Promise<T> {
     const baseUrl = await this.getBaseUrl();
     const response = await this.options.fetchApi.fetch(`${baseUrl}${path}`);
-
-    if (!response.ok) {
-      throw new Error(`GET ${path} failed: ${response.statusText}`);
-    }
-
-    return await response.json();
+    if (!response.ok) throw new Error(`GET ${path} failed: ${response.statusText}`);
+    return response.json();
   }
 
   async post<T>(path: string, body: unknown): Promise<T> {
@@ -283,15 +252,11 @@ export class DefaultApiClient implements ApiClient {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-
-    if (!response.ok) {
-      throw new Error(`POST ${path} failed: ${response.statusText}`);
-    }
-
-    return await response.json();
+    if (!response.ok) throw new Error(`POST ${path} failed: ${response.statusText}`);
+    return response.json();
   }
 
-  // Implement put and delete similarly
+  // put/delete follow the same pattern
 }
 ```
 
@@ -312,21 +277,16 @@ export class DefaultCacheApi implements CacheApi {
 
   get<T>(key: string): T | undefined {
     const entry = this.cache.get(key);
-
     if (!entry) return undefined;
     if (Date.now() > entry.expires) {
       this.cache.delete(key);
       return undefined;
     }
-
     return entry.value as T;
   }
 
-  set<T>(key: string, value: T, ttl = 60000): void {
-    this.cache.set(key, {
-      value,
-      expires: Date.now() + ttl,
-    });
+  set<T>(key: string, value: T, ttl = 60_000): void {
+    this.cache.set(key, { value, expires: Date.now() + ttl });
   }
 
   invalidate(key: string): void {
@@ -358,7 +318,6 @@ export class DefaultEventBusApi implements EventBusApi {
     if (!this.listeners.has(event)) {
       this.listeners.set(event, new Set());
     }
-
     this.listeners.get(event)!.add(callback as EventCallback<unknown>);
 
     return () => {
@@ -378,38 +337,37 @@ export class DefaultEventBusApi implements EventBusApi {
 
 ### Mocking APIs in Tests
 
+Prefer the `apis` option on `renderInTestApp` over manually wrapping with `TestApiProvider`:
+
 ```tsx
-import { renderInTestApp, TestApiProvider } from '@backstage/frontend-test-utils';
+import { renderInTestApp } from '@backstage/frontend-test-utils';
+import { screen } from '@testing-library/react';
 import { exampleApiRef } from './api';
 import { DataComponent } from './DataComponent';
 
 describe('DataComponent', () => {
   it('displays data from API', async () => {
     const mockApi = {
-      fetchData: jest.fn().mockResolvedValue({
-        id: '123',
-        name: 'Test',
-      }),
+      fetchData: jest.fn().mockResolvedValue({ id: '123', name: 'Test' }),
       updateData: jest.fn(),
       subscribe: jest.fn(() => () => {}),
     };
 
-    await renderInTestApp(
-      <TestApiProvider apis={[[exampleApiRef, mockApi]]}>
-        <DataComponent id="123" />
-      </TestApiProvider>
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText('Test')).toBeInTheDocument();
+    await renderInTestApp(<DataComponent id="123" />, {
+      apis: [[exampleApiRef, mockApi]],
     });
 
+    expect(await screen.findByText('Test')).toBeInTheDocument();
     expect(mockApi.fetchData).toHaveBeenCalledWith('123');
   });
 });
 ```
 
+`TestApiProvider` is still available for standalone rendering scenarios where you are not using `renderInTestApp`.
+
 ### Creating Test Implementations
+
+For APIs used in many tests, an in-memory test implementation is often more ergonomic than configuring `jest.fn()` in each test:
 
 ```tsx
 // src/api.test.ts
@@ -428,7 +386,7 @@ export class MockExampleApi implements ExampleApi {
     this.data.set(id, { ...existing, ...updates });
   }
 
-  subscribe(callback: (data: Data) => void): () => void {
+  subscribe(): () => void {
     return () => {};
   }
 
@@ -450,94 +408,68 @@ export class MockExampleApi implements ExampleApi {
 ### Keep APIs Small and Focused
 
 ```tsx
-// Good - focused API
+// Good — focused API
 export interface UserApi {
   getCurrentUser(): Promise<User>;
   updateProfile(updates: Partial<UserProfile>): Promise<void>;
 }
 
-// Bad - too many responsibilities
+// Bad — too many responsibilities in one ref
 export interface EverythingApi {
   getUser(): Promise<User>;
   getEntities(): Promise<Entity[]>;
   sendEmail(): Promise<void>;
   uploadFile(): Promise<void>;
-  // ... many more methods
 }
 ```
 
 ### Use Dependency Injection
 
 ```tsx
-// Good - depends on abstractions
+// Good — depends on abstractions
 class DefaultExampleApi implements ExampleApi {
   constructor(deps: { discoveryApi: DiscoveryApi; fetchApi: FetchApi }) {}
 }
 
-// Bad - creates dependencies internally
+// Bad — creates dependencies internally, hard to test
 class BadExampleApi implements ExampleApi {
-  private fetch = window.fetch; // Hard-coded dependency
+  private fetch = window.fetch;
 }
 ```
 
-### Handle Errors Gracefully
+### Handle Errors Meaningfully
+
+Don't swallow errors; prefer specific error messages that help the caller diagnose problems:
 
 ```tsx
 async fetchData(id: string): Promise<Data> {
-  try {
-    const baseUrl = await this.discoveryApi.getBaseUrl('example');
-    const response = await this.fetchApi.fetch(`${baseUrl}/data/${id}`);
+  const baseUrl = await this.options.discoveryApi.getBaseUrl('example');
+  const response = await this.options.fetchApi.fetch(`${baseUrl}/data/${id}`);
 
-    if (!response.ok) {
-      if (response.status === 404) {
-        throw new Error(`Data with ID ${id} not found`);
-      }
-      throw new Error(`Failed to fetch data: ${response.statusText}`);
+  if (!response.ok) {
+    if (response.status === 404) {
+      throw new Error(`Data with ID ${id} not found`);
     }
-
-    return await response.json();
-  } catch (error) {
-    // Log error for debugging
-    console.error('fetchData error:', error);
-    throw error;
+    throw new Error(`Failed to fetch data: ${response.status} ${response.statusText}`);
   }
+
+  return response.json();
 }
 ```
 
 ### Provide Type Safety
 
 ```tsx
-// Good - fully typed
+// Good — fully typed
 export interface TypedApi {
   fetchData(id: string): Promise<Data>;
   updateData(id: string, data: Partial<Data>): Promise<void>;
 }
 
-// Bad - using any
+// Bad — using any
 export interface UntypedApi {
   fetchData(id: any): Promise<any>;
   updateData(data: any): Promise<void>;
-}
-```
-
-### Document API Methods
-
-```tsx
-export interface ExampleApi {
-  /**
-   * Fetch data by unique identifier.
-   *
-   * @param id - The unique identifier for the data
-   * @returns Promise resolving to the data object
-   * @throws {Error} If the data is not found or the request fails
-   *
-   * @example
-   * ```typescript
-   * const data = await exampleApi.fetchData('abc123');
-   * console.log(data.name);
-   * ```
-   */
-  fetchData(id: string): Promise<Data>;
 }
 ```
 
@@ -545,27 +477,33 @@ export interface ExampleApi {
 
 ## Common Core APIs
 
+All of these are re-exported from `@backstage/frontend-plugin-api` — that is the preferred import path in NFS code.
+
 ### Discovery API
 
 Find backend plugin base URLs:
 
 ```tsx
-import { discoveryApiRef } from '@backstage/core-plugin-api';
+import { discoveryApiRef, useApi } from '@backstage/frontend-plugin-api';
 
-const discoveryApi = useApi(discoveryApiRef);
-const baseUrl = await discoveryApi.getBaseUrl('catalog');
-// Returns: http://localhost:7007/api/catalog
+function Example() {
+  const discoveryApi = useApi(discoveryApiRef);
+  // ...
+  // discoveryApi.getBaseUrl('catalog') resolves to e.g. http://localhost:7007/api/catalog
+}
 ```
 
 ### Fetch API
 
-Make authenticated HTTP requests:
+Make authenticated HTTP requests. The fetch API automatically attaches the current user's Backstage token, so backend plugins receive it:
 
 ```tsx
-import { fetchApiRef } from '@backstage/core-plugin-api';
+import { fetchApiRef, useApi } from '@backstage/frontend-plugin-api';
 
-const fetchApi = useApi(fetchApiRef);
-const response = await fetchApi.fetch('https://api.example.com/data');
+function Example() {
+  const fetchApi = useApi(fetchApiRef);
+  // fetchApi.fetch(url, options) — same signature as window.fetch
+}
 ```
 
 ### Identity API
@@ -573,11 +511,12 @@ const response = await fetchApi.fetch('https://api.example.com/data');
 Get user information:
 
 ```tsx
-import { identityApiRef } from '@backstage/core-plugin-api';
+import { identityApiRef, useApi } from '@backstage/frontend-plugin-api';
 
-const identityApi = useApi(identityApiRef);
-const { userEntityRef } = await identityApi.getBackstageIdentity();
-// Returns: "user:default/john.doe"
+async function load(identityApi: ReturnType<typeof useApi<typeof identityApiRef>>) {
+  const { userEntityRef } = await identityApi.getBackstageIdentity();
+  // Returns e.g. "user:default/john.doe"
+}
 ```
 
 ### Storage API
@@ -585,21 +524,36 @@ const { userEntityRef } = await identityApi.getBackstageIdentity();
 Persist data locally:
 
 ```tsx
-import { storageApiRef } from '@backstage/core-plugin-api';
+import { storageApiRef, useApi } from '@backstage/frontend-plugin-api';
 
-const storageApi = useApi(storageApiRef);
-const bucket = storageApi.forBucket('example');
+function Example() {
+  const storageApi = useApi(storageApiRef);
+  const bucket = storageApi.forBucket('example');
 
-// Set data
-bucket.set('key', { value: 'data' });
+  bucket.set('key', { value: 'data' });
+  // Read with await bucket.get('key')
+  // Observe with bucket.observe$('key').subscribe(change => ...)
+}
+```
 
-// Get data
-const data = await bucket.get('key');
+### Alert & Error APIs
 
-// Subscribe to changes
-bucket.observe$('key').subscribe(change => {
-  console.log('Value changed:', change.value);
-});
+Show user-facing notifications and report errors to the integrators' chosen handler:
+
+```tsx
+import {
+  alertApiRef,
+  errorApiRef,
+  useApi,
+} from '@backstage/frontend-plugin-api';
+
+function Example() {
+  const alertApi = useApi(alertApiRef);
+  const errorApi = useApi(errorApiRef);
+
+  alertApi.post({ message: 'Saved successfully', severity: 'success' });
+  errorApi.post(new Error('Something went wrong'));
+}
 ```
 
 ---
@@ -607,6 +561,6 @@ bucket.observe$('key').subscribe(change => {
 ## Official Documentation
 
 For comprehensive API documentation:
-- [Utility APIs](https://backstage.io/docs/api/utility-apis/)
-- [Core APIs](https://backstage.io/docs/reference/core-plugin-api/)
-- [Frontend Plugin API](https://backstage.io/docs/reference/frontend-plugin-api/)
+- [Utility APIs — Architecture](https://backstage.io/docs/frontend-system/architecture/utility-apis/)
+- [Utility APIs — Guides](https://backstage.io/docs/frontend-system/utility-apis/)
+- [Frontend Plugin API reference](https://backstage.io/docs/reference/frontend-plugin-api/)

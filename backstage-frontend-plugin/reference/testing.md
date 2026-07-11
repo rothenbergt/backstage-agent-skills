@@ -2,7 +2,9 @@
 
 ## Overview
 
-Comprehensive testing ensures frontend plugins work correctly and helps catch issues before production. Backstage provides specialized testing utilities in the `@backstage/frontend-test-utils` package.
+Comprehensive testing ensures frontend plugins work correctly and helps catch issues before production. Backstage provides specialized testing utilities in the `@backstage/frontend-test-utils` package for rendering components, exercising extensions, and mocking Utility APIs.
+
+This reference targets Backstage's **New Frontend System** (NFS).
 
 ---
 
@@ -13,13 +15,15 @@ Comprehensive testing ensures frontend plugins work correctly and helps catch is
 ```json
 {
   "devDependencies": {
-    "@backstage/frontend-test-utils": "^0.1.0",
-    "@testing-library/react": "^14.0.0",
+    "@backstage/frontend-test-utils": "^0.5.0",
+    "@testing-library/react": "^16.0.0",
     "@testing-library/jest-dom": "^6.0.0",
     "@testing-library/user-event": "^14.0.0"
   }
 }
 ```
+
+The Backstage repo is on React 18 at the time of writing, so `@testing-library/react` ^16 is the correct peer. `React.use` and other React 19 features are not yet available.
 
 ### Test File Structure
 
@@ -42,7 +46,7 @@ src/
 
 ### Basic Component Testing
 
-Use `renderInTestApp` to render components with proper Backstage context:
+Use `renderInTestApp` to render components with proper Backstage context. Prefer `screen` + `findBy*` for assertions on async content:
 
 ```tsx
 import { renderInTestApp } from '@backstage/frontend-test-utils';
@@ -53,40 +57,56 @@ describe('ExampleComponent', () => {
   it('renders content correctly', async () => {
     await renderInTestApp(<ExampleComponent />);
 
-    expect(screen.getByText('Hello World')).toBeInTheDocument();
+    expect(await screen.findByText('Hello World')).toBeInTheDocument();
   });
 });
 ```
 
 ### Mocking Utility APIs
 
-Use `TestApiProvider` to mock API dependencies:
+Pass overrides via the `apis` option of `renderInTestApp`. `mockApis.*` provides prebuilt mocks for common core APIs:
 
 ```tsx
-import { renderInTestApp, TestApiProvider } from '@backstage/frontend-test-utils';
+import {
+  mockApis,
+  renderInTestApp,
+} from '@backstage/frontend-test-utils';
+import { identityApiRef } from '@backstage/frontend-plugin-api';
 import { catalogApiRef } from '@backstage/plugin-catalog-react';
-import { EntityDetails } from './EntityDetails';
+import { catalogApiMock } from '@backstage/plugin-catalog-react/testUtils';
+import { screen } from '@testing-library/react';
+import { MyEntitiesList } from './MyEntitiesList';
 
-describe('EntityDetails', () => {
-  it('displays entity data', async () => {
-    const mockCatalogApi = {
-      getEntityByRef: jest.fn().mockResolvedValue({
-        apiVersion: 'backstage.io/v1alpha1',
-        kind: 'Component',
-        metadata: { name: 'test-component' },
-      }),
-    };
+describe('MyEntitiesList', () => {
+  it('renders entities owned by the current user', async () => {
+    await renderInTestApp(<MyEntitiesList />, {
+      apis: [
+        [
+          identityApiRef,
+          mockApis.identity({ userEntityRef: 'user:default/guest' }),
+        ],
+        [
+          catalogApiRef,
+          catalogApiMock({
+            entities: [
+              {
+                apiVersion: 'backstage.io/v1alpha1',
+                kind: 'Component',
+                metadata: { name: 'my-component' },
+                spec: { type: 'service', owner: 'user:default/guest' },
+              },
+            ],
+          }),
+        ],
+      ],
+    });
 
-    await renderInTestApp(
-      <TestApiProvider apis={[[catalogApiRef, mockCatalogApi]]}>
-        <EntityDetails entityRef="component:default/test-component" />
-      </TestApiProvider>
-    );
-
-    expect(screen.getByText('test-component')).toBeInTheDocument();
+    expect(await screen.findByText('my-component')).toBeInTheDocument();
   });
 });
 ```
+
+`TestApiProvider` from `@backstage/frontend-test-utils` is still available for the rare case where you need to wrap a subtree manually without going through `renderInTestApp`.
 
 ### Testing User Interactions
 
@@ -99,17 +119,14 @@ import userEvent from '@testing-library/user-event';
 import { SearchForm } from './SearchForm';
 
 describe('SearchForm', () => {
-  it('handles form submission', async () => {
+  it('submits the entered query', async () => {
     const onSubmit = jest.fn();
     const user = userEvent.setup();
 
     await renderInTestApp(<SearchForm onSubmit={onSubmit} />);
 
-    const input = screen.getByLabelText('Search');
-    await user.type(input, 'test query');
-
-    const button = screen.getByRole('button', { name: 'Search' });
-    await user.click(button);
+    await user.type(screen.getByLabelText('Search'), 'test query');
+    await user.click(screen.getByRole('button', { name: 'Search' }));
 
     expect(onSubmit).toHaveBeenCalledWith('test query');
   });
@@ -120,45 +137,87 @@ describe('SearchForm', () => {
 
 ## Testing Extensions
 
-### Single Extension Testing
+### Single Extension
 
-Use `createExtensionTester` to test extensions in isolation:
+Use `createExtensionTester` to get access to the React element produced by an extension, then render it through `renderInTestApp`:
 
 ```tsx
-import { createExtensionTester } from '@backstage/frontend-test-utils';
+import {
+  createExtensionTester,
+  renderInTestApp,
+} from '@backstage/frontend-test-utils';
 import { screen } from '@testing-library/react';
 import { examplePage } from './plugin';
 
 describe('examplePage extension', () => {
   it('renders the page content', async () => {
-    const tester = createExtensionTester(examplePage);
+    await renderInTestApp(
+      createExtensionTester(examplePage).reactElement(),
+    );
 
-    const { reactElement } = await tester.render();
-
-    expect(screen.getByText('Example Page')).toBeInTheDocument();
+    expect(await screen.findByText('Example Page')).toBeInTheDocument();
   });
 });
 ```
 
-### Multiple Extension Testing
+The tester exposes:
+- `.reactElement()` — returns the React element from `coreExtensionData.reactElement` (most common).
+- `.get(dataRef)` — read any output data the extension produces.
+- `.query(extension)` — get another extension's output after wiring.
+- `.snapshot()` — full snapshot of the extension tree for debugging.
+- `.add(extension, opts?)` — attach another extension to this tester (see below).
 
-Test interactions between multiple extensions:
+### API overrides on the tester
+
+Pass `apis` directly to `createExtensionTester` when you need API mocks for the extension under test:
 
 ```tsx
-import { createExtensionTester } from '@backstage/frontend-test-utils';
-import { examplePlugin } from './plugin';
-import { additionalExtension } from './extensions';
+import {
+  createExtensionTester,
+  mockApis,
+  renderInTestApp,
+} from '@backstage/frontend-test-utils';
+import { identityApiRef } from '@backstage/frontend-plugin-api';
+import { screen } from '@testing-library/react';
+import { examplePage } from './plugin';
 
-describe('plugin with multiple extensions', () => {
-  it('loads all extensions correctly', async () => {
-    const tester = createExtensionTester(examplePlugin)
-      .add(additionalExtension);
+describe('examplePage extension', () => {
+  it('renders with a custom identity', async () => {
+    await renderInTestApp(
+      createExtensionTester(examplePage, {
+        apis: [
+          [
+            identityApiRef,
+            mockApis.identity({ userEntityRef: 'user:default/guest' }),
+          ],
+        ],
+      }).reactElement(),
+    );
 
-    const pageOutput = await tester.query(examplePlugin.extensions[0]);
-    const navOutput = await tester.query(examplePlugin.extensions[1]);
+    expect(await screen.findByText('Example Page')).toBeInTheDocument();
+  });
+});
+```
 
-    expect(pageOutput).toBeDefined();
-    expect(navOutput).toBeDefined();
+### Multiple Extensions
+
+Exercise interactions between extensions (e.g. a parent page with sub-pages, or a page whose contents come from another plugin's extension) by chaining `.add(...)`:
+
+```tsx
+import {
+  createExtensionTester,
+  renderInTestApp,
+} from '@backstage/frontend-test-utils';
+import { screen } from '@testing-library/react';
+import { examplePage, exampleOverviewTab } from './plugin';
+
+describe('examplePage with overview tab', () => {
+  it('renders the overview tab inside the page', async () => {
+    const tester = createExtensionTester(examplePage).add(exampleOverviewTab);
+
+    await renderInTestApp(tester.reactElement());
+
+    expect(await screen.findByRole('tab', { name: 'Overview' })).toBeInTheDocument();
   });
 });
 ```
@@ -167,52 +226,27 @@ describe('plugin with multiple extensions', () => {
 
 ## Testing Configuration
 
-### Extension Configuration
-
-Test extensions with different configurations:
+Extensions with config schemas can be tested under different configurations by passing `config` to the tester:
 
 ```tsx
-import { createExtensionTester } from '@backstage/frontend-test-utils';
-import { configurableExtension } from './extensions';
+import {
+  createExtensionTester,
+  renderInTestApp,
+} from '@backstage/frontend-test-utils';
+import { screen } from '@testing-library/react';
+import { examplePage } from './plugin';
 
-describe('configurableExtension', () => {
-  it('respects custom configuration', async () => {
-    const tester = createExtensionTester(configurableExtension, {
-      config: {
-        title: 'Custom Title',
-        showAdvanced: true,
-      },
+describe('examplePage config', () => {
+  it('respects custom path', async () => {
+    const tester = createExtensionTester(examplePage, {
+      config: { path: '/custom-example' },
     });
 
-    const { reactElement } = await tester.render();
-
-    expect(screen.getByText('Custom Title')).toBeInTheDocument();
-  });
-});
-```
-
-### App-Level Configuration
-
-Test with app-level configuration:
-
-```tsx
-import { createExtensionTester } from '@backstage/frontend-test-utils';
-import { exampleExtension } from './extensions';
-
-describe('exampleExtension with app config', () => {
-  it('uses app configuration', async () => {
-    const tester = createExtensionTester(exampleExtension, {
-      appConfig: {
-        app: {
-          title: 'Test App',
-        },
-        example: {
-          apiUrl: 'https://test.example.com',
-        },
-      },
+    await renderInTestApp(tester.reactElement(), {
+      mountedRoutes: { '/custom-example': examplePage.getOutput('coreExtensionData.routeRef') },
     });
 
-    // Test that extension uses the configuration
+    expect(await screen.findByText('Example Page')).toBeInTheDocument();
   });
 });
 ```
@@ -221,29 +255,31 @@ describe('exampleExtension with app config', () => {
 
 ## Testing Utility APIs
 
-### API Implementation Testing
+### Testing an API Implementation Directly
 
-Test custom API implementations:
+Test custom API implementations without rendering anything:
 
 ```tsx
 import { DefaultExampleApi } from './ExampleApi';
 
 describe('DefaultExampleApi', () => {
   let api: DefaultExampleApi;
-  let mockDiscoveryApi: jest.Mocked<DiscoveryApi>;
+  let mockDiscoveryApi: { getBaseUrl: jest.Mock };
+  let mockFetchApi: { fetch: jest.Mock };
 
   beforeEach(() => {
     mockDiscoveryApi = {
       getBaseUrl: jest.fn().mockResolvedValue('https://api.example.com'),
     };
-
+    mockFetchApi = { fetch: jest.fn() };
     api = new DefaultExampleApi({
-      discoveryApi: mockDiscoveryApi,
+      discoveryApi: mockDiscoveryApi as any,
+      fetchApi: mockFetchApi as any,
     });
   });
 
   it('fetches data correctly', async () => {
-    global.fetch = jest.fn().mockResolvedValue({
+    mockFetchApi.fetch.mockResolvedValue({
       ok: true,
       json: async () => ({ id: '123', name: 'Test' }),
     });
@@ -254,45 +290,37 @@ describe('DefaultExampleApi', () => {
     expect(mockDiscoveryApi.getBaseUrl).toHaveBeenCalledWith('example');
   });
 
-  it('handles errors gracefully', async () => {
-    global.fetch = jest.fn().mockResolvedValue({
+  it('throws a helpful error on 404', async () => {
+    mockFetchApi.fetch.mockResolvedValue({
       ok: false,
       status: 404,
+      statusText: 'Not Found',
     });
 
-    await expect(api.fetchData('invalid')).rejects.toThrow('Not found');
+    await expect(api.fetchData('invalid')).rejects.toThrow(/not found/i);
   });
 });
 ```
 
-### API Integration Testing
-
-Test components using APIs:
+### Testing Components Through Mocked APIs
 
 ```tsx
-import { renderInTestApp, TestApiProvider } from '@backstage/frontend-test-utils';
+import { renderInTestApp } from '@backstage/frontend-test-utils';
+import { screen } from '@testing-library/react';
 import { exampleApiRef } from './api';
 import { DataDisplay } from './DataDisplay';
 
-describe('DataDisplay with API', () => {
+describe('DataDisplay', () => {
   it('displays data from API', async () => {
     const mockApi = {
-      fetchData: jest.fn().mockResolvedValue({
-        id: '123',
-        name: 'Test Data',
-      }),
+      fetchData: jest.fn().mockResolvedValue({ id: '123', name: 'Test Data' }),
     };
 
-    await renderInTestApp(
-      <TestApiProvider apis={[[exampleApiRef, mockApi]]}>
-        <DataDisplay id="123" />
-      </TestApiProvider>
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText('Test Data')).toBeInTheDocument();
+    await renderInTestApp(<DataDisplay id="123" />, {
+      apis: [[exampleApiRef, mockApi]],
     });
 
+    expect(await screen.findByText('Test Data')).toBeInTheDocument();
     expect(mockApi.fetchData).toHaveBeenCalledWith('123');
   });
 });
@@ -302,37 +330,30 @@ describe('DataDisplay with API', () => {
 
 ## Testing Entity Components
 
-### Entity Context Mocking
-
-Test components that use entity context:
+For components that depend on `useEntity`, wrap with `EntityProvider`. For more realistic setups, use `createTestEntityPage` from `@backstage/plugin-catalog-react/testUtils` which assembles a plausible entity route shell:
 
 ```tsx
 import { renderInTestApp } from '@backstage/frontend-test-utils';
 import { EntityProvider } from '@backstage/plugin-catalog-react';
+import { screen } from '@testing-library/react';
 import { EntityComponent } from './EntityComponent';
 
 describe('EntityComponent', () => {
   it('renders entity information', async () => {
-    const mockEntity = {
+    const entity = {
       apiVersion: 'backstage.io/v1alpha1',
       kind: 'Component',
-      metadata: {
-        name: 'my-component',
-        namespace: 'default',
-      },
-      spec: {
-        type: 'service',
-        lifecycle: 'production',
-      },
+      metadata: { name: 'my-component', namespace: 'default' },
+      spec: { type: 'service', lifecycle: 'production' },
     };
 
     await renderInTestApp(
-      <EntityProvider entity={mockEntity}>
+      <EntityProvider entity={entity}>
         <EntityComponent />
-      </EntityProvider>
+      </EntityProvider>,
     );
 
-    expect(screen.getByText('my-component')).toBeInTheDocument();
+    expect(await screen.findByText('my-component')).toBeInTheDocument();
     expect(screen.getByText('service')).toBeInTheDocument();
   });
 });
@@ -342,44 +363,33 @@ describe('EntityComponent', () => {
 
 ## Testing Permissions
 
-### Permission Checks
-
-Test components with permission-based visibility:
-
 ```tsx
-import { renderInTestApp, TestApiProvider } from '@backstage/frontend-test-utils';
+import { renderInTestApp } from '@backstage/frontend-test-utils';
 import { permissionApiRef } from '@backstage/plugin-permission-react';
+import { screen } from '@testing-library/react';
 import { ProtectedComponent } from './ProtectedComponent';
 
 describe('ProtectedComponent', () => {
-  it('shows content when permission is granted', async () => {
-    const mockPermissionApi = {
-      authorize: jest.fn().mockResolvedValue({
-        result: 'ALLOW',
-      }),
+  it('shows content when allowed', async () => {
+    const permissionApi = {
+      authorize: jest.fn().mockResolvedValue({ result: 'ALLOW' }),
     };
 
-    await renderInTestApp(
-      <TestApiProvider apis={[[permissionApiRef, mockPermissionApi]]}>
-        <ProtectedComponent />
-      </TestApiProvider>
-    );
+    await renderInTestApp(<ProtectedComponent />, {
+      apis: [[permissionApiRef, permissionApi]],
+    });
 
-    expect(screen.getByText('Protected Content')).toBeInTheDocument();
+    expect(await screen.findByText('Protected Content')).toBeInTheDocument();
   });
 
-  it('hides content when permission is denied', async () => {
-    const mockPermissionApi = {
-      authorize: jest.fn().mockResolvedValue({
-        result: 'DENY',
-      }),
+  it('hides content when denied', async () => {
+    const permissionApi = {
+      authorize: jest.fn().mockResolvedValue({ result: 'DENY' }),
     };
 
-    await renderInTestApp(
-      <TestApiProvider apis={[[permissionApiRef, mockPermissionApi]]}>
-        <ProtectedComponent />
-      </TestApiProvider>
-    );
+    await renderInTestApp(<ProtectedComponent />, {
+      apis: [[permissionApiRef, permissionApi]],
+    });
 
     expect(screen.queryByText('Protected Content')).not.toBeInTheDocument();
   });
@@ -390,30 +400,26 @@ describe('ProtectedComponent', () => {
 
 ## Testing Routes and Navigation
 
-### Route Testing
-
-Test navigation and routing:
+Use the `mountedRoutes` option to satisfy `useRouteRef` during tests:
 
 ```tsx
 import { renderInTestApp } from '@backstage/frontend-test-utils';
-import { useRouteRef } from '@backstage/core-plugin-api';
+import { useRouteRef } from '@backstage/frontend-plugin-api';
 import { rootRouteRef } from './routes';
+import { screen } from '@testing-library/react';
 
-const NavigationComponent = () => {
-  const routeRef = useRouteRef(rootRouteRef);
-  return <a href={routeRef()}>Go to Example</a>;
-};
+function NavigationComponent() {
+  const getPath = useRouteRef(rootRouteRef);
+  return <a href={getPath()}>Go to Example</a>;
+}
 
 describe('NavigationComponent', () => {
-  it('generates correct route', async () => {
+  it('links to the mounted route', async () => {
     await renderInTestApp(<NavigationComponent />, {
-      mountedRoutes: {
-        '/example': rootRouteRef,
-      },
+      mountedRoutes: { '/example': rootRouteRef },
     });
 
-    const link = screen.getByText('Go to Example');
-    expect(link).toHaveAttribute('href', '/example');
+    expect(screen.getByText('Go to Example')).toHaveAttribute('href', '/example');
   });
 });
 ```
@@ -444,23 +450,23 @@ describe('ComponentName', () => {
 });
 ```
 
+Prefer fewer thorough tests with multiple assertions over many small ones — it's faster and easier to maintain while still catching regressions.
+
 ### Async Testing
 
-Always await async operations:
+Always await async rendering and use `findBy*` (which retries with a built-in timeout) for asynchronous assertions:
 
 ```tsx
 // Good
 await renderInTestApp(<Component />);
-await waitFor(() => expect(screen.getByText('Loaded')).toBeInTheDocument());
+expect(await screen.findByText('Loaded')).toBeInTheDocument();
 
-// Bad
-renderInTestApp(<Component />); // Missing await
-expect(screen.getByText('Loaded')).toBeInTheDocument(); // May fail due to timing
+// Avoid — may race with loading state
+renderInTestApp(<Component />);
+expect(screen.getByText('Loaded')).toBeInTheDocument();
 ```
 
 ### Mock Cleanup
-
-Clean up mocks between tests:
 
 ```tsx
 describe('Component', () => {
@@ -476,6 +482,10 @@ describe('Component', () => {
 });
 ```
 
+### Avoid `test-id` attributes
+
+Query by user-visible text, role, or label. Only fall back to `data-testid` when the DOM doesn't expose a sensible way to find the element — that keeps tests robust to cosmetic markup changes.
+
 ---
 
 ## Running Tests
@@ -483,75 +493,54 @@ describe('Component', () => {
 ### Command Line
 
 ```bash
-# Run all tests (--watchAll=false prevents jest watch mode, which never exits in CI/agents)
+# Run all tests in the current package (--watchAll=false prevents jest watch
+# mode, which never exits in CI/agents)
 yarn backstage-cli package test --watchAll=false
 
-# Run tests in watch mode
+# Watch mode
 yarn backstage-cli package test --watch
 
-# Run with coverage
+# With coverage
 yarn backstage-cli package test --coverage --watchAll=false
 
-# Run specific test file
+# A specific file
 yarn backstage-cli package test ExampleComponent.test.tsx --watchAll=false
 ```
 
-### CI/CD Integration
+From the repo root, the top-level invocation is:
 
-```yaml
-# .github/workflows/test.yml
-name: Test
-on: [push, pull_request]
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
-      - run: yarn install --frozen-lockfile
-      - run: yarn backstage-cli package test --coverage
+```bash
+CI=1 yarn test <path>
 ```
+
+Always pass a path — running the entire suite is slow and rarely what you want.
 
 ---
 
 ## Common Testing Patterns
 
-### Loading States
-
-```tsx
-it('shows loading spinner', async () => {
-  const { rerender } = await renderInTestApp(<DataComponent loading={true} />);
-  expect(screen.getByRole('progressbar')).toBeInTheDocument();
-
-  rerender(<DataComponent loading={false} data={mockData} />);
-  expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
-});
-```
-
 ### Error Handling
 
 ```tsx
-it('displays error message', async () => {
+it('displays an error message when the API fails', async () => {
   const mockApi = {
     fetchData: jest.fn().mockRejectedValue(new Error('Network error')),
   };
 
-  await renderInTestApp(
-    <TestApiProvider apis={[[exampleApiRef, mockApi]]}>
-      <DataComponent />
-    </TestApiProvider>
-  );
-
-  await waitFor(() => {
-    expect(screen.getByText(/error/i)).toBeInTheDocument();
+  await renderInTestApp(<DataComponent id="123" />, {
+    apis: [[exampleApiRef, mockApi]],
   });
+
+  expect(await screen.findByText(/error/i)).toBeInTheDocument();
 });
 ```
 
 ### Snapshot Testing
 
+Use sparingly — snapshots are brittle in UI code. Only snapshot stable, deterministic output:
+
 ```tsx
-it('matches snapshot', async () => {
+it('matches snapshot for the default render', async () => {
   const { container } = await renderInTestApp(<Component data={mockData} />);
   expect(container.firstChild).toMatchSnapshot();
 });
@@ -563,4 +552,5 @@ it('matches snapshot', async () => {
 
 For the latest testing guidance:
 - [Frontend System Testing](https://backstage.io/docs/frontend-system/building-plugins/testing/)
-- [Testing with Jest](https://backstage.io/docs/plugins/testing/)
+- [Testing Utility APIs](https://backstage.io/docs/frontend-system/utility-apis/testing/)
+- [Testing with Jest (shared)](https://backstage.io/docs/plugins/testing/)
