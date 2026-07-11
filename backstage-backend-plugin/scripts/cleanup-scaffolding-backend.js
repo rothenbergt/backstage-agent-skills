@@ -16,6 +16,14 @@
 const fs = require('fs');
 const path = require('path');
 
+// Helper: Convert kebab-case to PascalCase
+function toPascalCase(str) {
+  return str
+    .split('-')
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join('');
+}
+
 // Parse command line arguments
 const pluginPath = process.argv[2];
 
@@ -95,30 +103,47 @@ export async function createRouter(
     console.log('  ✅ Replaced with simple /health endpoint');
   }
 
-  // Step 3: Update plugin.ts to remove todoList dependency
-  console.log('\n🔧 Updating plugin.ts...');
+  // Step 3: Rewrite plugin.ts without the todoList dependency.
+  // Rewriting (rather than regex-editing) keeps formatting clean, and adds the
+  // auth policy that makes /health reachable without credentials — backends
+  // are secure by default, so without it the health check returns 401.
+  console.log('\n🔧 Rewriting plugin.ts...');
 
   const pluginFilePath = path.join(pluginPath, 'src', 'plugin.ts');
   if (fs.existsSync(pluginFilePath)) {
-    let pluginContent = fs.readFileSync(pluginFilePath, 'utf8');
+    const pluginVar = `${pluginId.charAt(0).toLowerCase()}${toPascalCase(pluginId).slice(1)}Plugin`;
+    const simplePlugin = `import {
+  coreServices,
+  createBackendPlugin,
+} from '@backstage/backend-plugin-api';
+import { createRouter } from './router';
 
-    // Remove todoList import
-    pluginContent = pluginContent.replace(/import \{ todoListServiceRef \} from ['"]\.\/services\/TodoListService['"'];?\n?/g, '');
+/**
+ * ${pluginVar} backend plugin
+ *
+ * @public
+ */
+export const ${pluginVar} = createBackendPlugin({
+  pluginId: '${pluginId}',
+  register(env) {
+    env.registerInit({
+      deps: {
+        httpAuth: coreServices.httpAuth,
+        httpRouter: coreServices.httpRouter,
+      },
+      async init({ httpAuth, httpRouter }) {
+        httpRouter.use(await createRouter({ httpAuth }));
 
-    // Remove todoList from deps
-    pluginContent = pluginContent.replace(/\s*todoList: todoListServiceRef,?\n?/g, '');
+        // Secure-by-default: open /health only
+        httpRouter.addAuthPolicy({ path: '/health', allow: 'unauthenticated' });
+      },
+    });
+  },
+});
+`;
 
-    // Remove todoList from init params
-    pluginContent = pluginContent.replace(/,?\s*todoList\s*,?/g, '');
-
-    // Clean up the createRouter call
-    pluginContent = pluginContent.replace(
-      /await createRouter\(\{\s*httpAuth,?\s*\}\)/g,
-      'await createRouter({ httpAuth })'
-    );
-
-    fs.writeFileSync(pluginFilePath, pluginContent);
-    console.log('  ✅ Removed todoList service dependency');
+    fs.writeFileSync(pluginFilePath, simplePlugin);
+    console.log('  ✅ Rewrote plugin.ts (todoList removed, /health auth policy added)');
   }
 
   // Step 4: Remove test files

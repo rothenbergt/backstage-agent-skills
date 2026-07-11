@@ -493,17 +493,18 @@ Query by user-visible text, role, or label. Only fall back to `data-testid` when
 ### Command Line
 
 ```bash
-# Run all tests in the current package
-yarn backstage-cli package test
+# Run all tests in the current package (--watchAll=false prevents jest watch
+# mode, which never exits in CI/agents)
+yarn backstage-cli package test --watchAll=false
 
 # Watch mode
 yarn backstage-cli package test --watch
 
 # With coverage
-yarn backstage-cli package test --coverage
+yarn backstage-cli package test --coverage --watchAll=false
 
 # A specific file
-yarn backstage-cli package test ExampleComponent.test.tsx
+yarn backstage-cli package test ExampleComponent.test.tsx --watchAll=false
 ```
 
 From the repo root, the top-level invocation is:

@@ -1,7 +1,7 @@
 ---
 name: backstage-frontend-plugin
 description: "Build Backstage frontend plugins with the New Frontend System: createFrontendPlugin, blueprints, routes, Utility APIs, testing. Use for pages, nav, entity content, or cards."
-version: 1.1.0
+version: 1.2.0
 license: Complete terms in LICENSE.txt
 ---
 
@@ -68,7 +68,7 @@ After implementing the plugin:
    - Utility APIs with mocked dependencies
 3. Run tests and achieve good coverage:
    ```bash
-   yarn backstage-cli package test --coverage
+   yarn backstage-cli package test --coverage --watchAll=false
    ```
 
 ---
@@ -184,6 +184,12 @@ This creates `plugins/example/` already wired for the New Frontend System:
 - `src/components/` — example page + list components
 - `dev/index.tsx` — `createDevApp({ features: [plugin] })` for standalone dev
 
+The scaffold ships a working example todo app (`src/components/TodoPage/` and `src/components/TodoList/`). Run the cleanup script to strip the example and leave a minimal named page component:
+
+```bash
+node scripts/cleanup-scaffolding.js plugins/example
+```
+
 > **Legacy apps only:** If `yarn new` detects a legacy-app repo, it will offer the `legacy-frontend-plugin` template instead. In that case you'll need to convert manually to NFS — see the migration guide at `docs/frontend-system/building-plugins/05-migrating.md`.
 
 ### 2) Routes (`src/routes.ts`)
@@ -228,7 +234,7 @@ export const examplePlugin = createFrontendPlugin({
 });
 ```
 
-> **Note:** `NavItemBlueprint` still exists but is `@deprecated`. Nav items are now auto-inferred from any `PageBlueprint` that has a `title` and `icon`, or from the plugin-level `title`/`icon` on `createFrontendPlugin`. New code should not use `NavItemBlueprint`.
+> **Note:** `NavItemBlueprint` is deprecated and has been removed entirely on current Backstage main. Nav items are now auto-inferred from any `PageBlueprint` that has a `title` and `icon`, or from the plugin-level `title`/`icon` on `createFrontendPlugin`. New code should not use `NavItemBlueprint`.
 
 ### 4) Page Component (`src/components/ExamplePage.tsx`)
 
@@ -361,7 +367,9 @@ const overviewTab = SubPageBlueprint.make({
 Run tests and lints with Backstage's CLI:
 
 ```bash
-yarn backstage-cli package test
+# Always pass --watchAll=false when running non-interactively (CI, AI agents);
+# without it jest starts in watch mode and never exits.
+yarn backstage-cli package test --watchAll=false
 yarn backstage-cli package lint
 yarn backstage-cli repo lint
 ```

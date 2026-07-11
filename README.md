@@ -48,8 +48,8 @@ Both skills follow the progressive disclosure principle:
 
 Concise helpers to strip scaffolded example code after generating a plugin.
 
-- Frontend: removes ExampleFetchComponent, renames ExampleComponent to PluginNamePage, and updates imports.
-- Backend: removes example services and tests, simplifies router to /health, and marks options as used to avoid TS6133.
+- Frontend: removes the example todo components, creates a minimal PluginNamePage, and updates plugin.tsx.
+- Backend: removes the example todo service and tests, simplifies the router to /health, and opens /health with an auth policy so it works without credentials.
 
 ## License
 

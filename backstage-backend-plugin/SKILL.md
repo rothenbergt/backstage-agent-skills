@@ -1,7 +1,7 @@
 ---
 name: backstage-backend-plugin
 description: "Build Backstage backend plugins and modules with createBackendPlugin: DI, httpRouter, secure-by-default auth, Knex DB, scheduler, testing, extension points. Use for APIs, modules, and background jobs."
-version: 1.1.0
+version: 1.2.0
 license: Complete terms in LICENSE.txt
 ---
 
@@ -80,7 +80,7 @@ After implementing the plugin:
    - Authentication flows using `mockCredentials` and `mockServices.httpAuth.mock`
 3. Run tests and achieve good coverage:
    ```bash
-   yarn backstage-cli package test --coverage
+   yarn backstage-cli package test --coverage --watchAll=false
    ```
 
 ---
@@ -403,7 +403,9 @@ Scaffold a module with `yarn new` → `backend-module`. Generated packages live 
 ## Testing, linting & structure checks
 
 ```bash
-yarn backstage-cli package test
+# Always pass --watchAll=false when running non-interactively (CI, AI agents);
+# without it jest starts in watch mode and never exits.
+yarn backstage-cli package test --watchAll=false
 yarn backstage-cli package lint
 yarn backstage-cli repo lint
 ```
