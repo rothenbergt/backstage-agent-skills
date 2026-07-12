@@ -27,14 +27,33 @@ Build Backstage backend plugins and modules with `createBackendPlugin`, core ser
 - Production-ready patterns for validation, error handling (via `MiddlewareFactory` / root error middleware), and security
 - Comprehensive testing guide with `@backstage/backend-test-utils` (`startTestBackend` + `supertest`, `mockServices`, `mockCredentials`, MSW v2, `TestDatabases`)
 
-## Installation
+## Installation and Usage
 
 Each skill is a self-contained folder with:
 
 - `SKILL.md` - Main skill instructions and workflow
 - `reference/` - Detailed reference documentation loaded on-demand
 
-Import the skill folder into your Claude Code environment to use.
+These are [Agent Skills](https://agentskills.io), instructions that an AI coding agent loads to do better work. They do not hook into Backstage tooling directly, so placing them in `.github/` or running `yarn new` yourself will not use them. Instead, the agent reads the skill and then runs `yarn new`, converts the scaffold, and writes code following the skill's guidance.
+
+### Claude Code
+
+Copy a skill folder into your workspace and Claude Code discovers it automatically.
+
+```bash
+# Project-level (this workspace only)
+mkdir -p .claude/skills
+cp -r backstage-frontend-plugin .claude/skills/
+
+# Or user-level (all your projects)
+cp -r backstage-frontend-plugin ~/.claude/skills/
+```
+
+Then just ask for what you want, for example "create a new frontend plugin called scorecards with a page and an entity tab". Claude matches the request to the skill and follows its workflow. You can also invoke it explicitly by name.
+
+### Other assistants (Copilot, Cursor, etc.)
+
+Tools without Agent Skills support cannot auto-discover these, but the content still works as context. Attach the relevant `SKILL.md` (and any `reference/` file) to your chat, or point to it from your tool's instruction file such as `.github/copilot-instructions.md`, and ask the assistant to follow it when building the plugin.
 
 ## Structure
 
